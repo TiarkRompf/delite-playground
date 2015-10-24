@@ -261,7 +261,7 @@ trait TPCHQ1Trait extends TPCHBaseTrait {
     
     toc(q)
     q.printAsTable()
-    q.writeAsJSON("out.json")
+    //q.writeAsJSON("out.json")
   }    
 }
 
