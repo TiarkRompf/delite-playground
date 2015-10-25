@@ -13,6 +13,8 @@ parallelExecution in Test := false
 
 libraryDependencies += "org.scala-lang.virtualized" % "scala-compiler" % "2.11.2"
 
+libraryDependencies += "jline" % "jline" % "2.11"
+
 libraryDependencies += "EPFL" %% "lms" % "0.3-SNAPSHOT"
 
 libraryDependencies += "stanford-ppl" %% "framework" % "0.1-SNAPSHOT"
