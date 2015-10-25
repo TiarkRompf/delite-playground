@@ -305,9 +305,23 @@ trait TPCHQ14Trait extends TPCHBaseTrait {
   }
 }
 
+
+
+import org.apache.spark.SparkContext
+import org.apache.spark.SparkContext._
+import org.apache.spark.SparkConf
+
+
+
 object Q1_Runner {
 	def main(args1: Array[String]) {
     if (args1.length < 1) error("usage: need base dir as argument")
+
+    val conf = new SparkConf().setAppName("Simple Application").setMaster("local[1]")
+    val sc = new SparkContext(conf)
+
+
+
     object TPCHQ1Compiler extends OptiQLApplicationCompiler with TPCHQ1Trait with DeliteTestRunner {
       override def main() {
         println("TPC-H " + queryName)

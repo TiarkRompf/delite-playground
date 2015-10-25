@@ -23,5 +23,31 @@ libraryDependencies += "stanford-ppl" %% "runtime" % "0.1-SNAPSHOT"
 
 libraryDependencies += "stanford-ppl" %% "optiql" % "0.1-SNAPSHOT"
 
+libraryDependencies += "org.apache.spark" %% "spark-core" % "1.5.1"
 
-libraryDependencies += "com.google.protobuf" % "protobuf-java" % "2.4.1"
+
+
+//libraryDependencies += "com.google.protobuf" % "protobuf-java" % "2.4.1"
+
+
+mergeStrategy in assembly <<= (mergeStrategy in assembly) { (old) =>
+  {
+  	// Delite and lms use scala-virtualized instead of plain scala.
+  	// For assembly, we want to pick the virtualized versions of
+  	// scala-library and scala-compiler.
+    case PathList("scala", xs @ _*) => MergeStrategy.first // Is first vs last deterministic?
+    case "interactive.properties" => MergeStrategy.last
+    case "compiler.properties" => MergeStrategy.last
+    case "library.properties" => MergeStrategy.last
+    case "reflect.properties" => MergeStrategy.last
+    case "scaladoc.properties" => MergeStrategy.last
+    case "repl.properties" => MergeStrategy.last
+    case PathList("com", "google", "common", xs @ _*) => MergeStrategy.last
+    case PathList("javax", "servlet", xs @ _*) => MergeStrategy.last
+    case PathList("org", "apache", xs @ _*) => MergeStrategy.last
+    case PathList("com", "esotericsoftware", xs @ _*) => MergeStrategy.last
+    case "about.html" => MergeStrategy.rename
+    case x => old(x)
+  }
+}
+
