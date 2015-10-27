@@ -1,0 +1,91 @@
+// test -- this can be run from the repl
+
+val file = "/Users/me/Downloads/dbtoaster/examples/data/tpch/lineitem.csv"
+
+import org.apache.spark.sql.types._
+
+val schema = StructType(Seq(
+    StructField("l_orderkey", IntegerType, true), 
+    StructField("l_partkey", IntegerType, true), 
+    StructField("l_suppkey", IntegerType, true), 
+    StructField("l_linenumber", IntegerType, true), 
+    StructField("l_quantity", DoubleType, true), 
+    StructField("l_extendedprice", DoubleType, true), 
+    StructField("l_discount", DoubleType, true), 
+    StructField("l_tax", DoubleType, true), 
+    StructField("l_returnflag", StringType, true), // Char
+    StructField("l_linestatus", StringType, true), 
+    StructField("l_shipdate", DateType, true), 
+    StructField("l_commitdate", DateType, true), 
+    StructField("l_receiptdate", DateType, true), 
+    StructField("l_shipinstruct", StringType, true), 
+    StructField("l_shipmode", StringType, true), 
+    StructField("l_comment", StringType, true)))
+
+val df = (sqlContext.read
+    .format("com.databricks.spark.csv")
+    .option("delimiter", "|")
+    .option("header", "false") // Use first line of all files as header    
+    .option("inferSchema", "false") // Automatically infer data types
+    .schema(schema)
+    .load(file))
+
+val res = df.filter("l_quantity > 1").select("l_partkey")
+
+
+import org.apache.spark.sql.catalyst.plans.logical._
+import org.apache.spark.sql.execution.datasources.LogicalRelation
+import org.apache.spark.sql.sources.BaseRelation
+import com.databricks.spark.csv.CsvRelation
+import org.apache.spark.sql.catalyst.expressions._
+
+val lgr = "org.apache.spark.sql.execution.datasources.LogicalRelation"
+
+def compileRef(d: Expression): Any = d match {
+    case AttributeReference(name,dataType,nullable,metadata) =>
+        println("#ref")
+        println(name)
+    case Literal(value,dataType) =>
+        println("#lit")
+        println(value)
+}
+
+def compileExpr(d: Expression): Any = d match {
+    case GreaterThan(a,b) =>
+        println("<")
+        compileRef(a)
+        compileRef(b)
+}
+
+def compile(d: LogicalPlan): Any = d match {
+    case Project(projectList, child) => 
+        println(projectList)
+        println(projectList.map(_.getClass))
+        compile(child)
+    case Filter(condition, child) => 
+        println("filter")
+        compileExpr(condition)
+        compile(child)
+    case a: LeafNode if a.getClass.getName == lgr => 
+        // class LogicalRelation is private, so we use reflection
+        // to get around access control
+        val fld = a.getClass.getDeclaredFields.filter(_.getName == "relation").head
+        fld.setAccessible(true)
+        val relation = fld.get(a).asInstanceOf[BaseRelation]
+        relation match {
+            case relation: CsvRelation => 
+                println("got it: " + relation)
+                println("schema:") 
+                println(relation.schema)
+                println("location:") 
+                println(relation.location)
+                println("delimiter:") 
+                println(relation.delimiter)
+            case _ =>
+                println("unknown base relation: " + relation + "/" + relation.getClass)
+        }
+    case _ => 
+        println("unknown query operator: " + d.getClass)
+}
+
+compile(res.queryExecution.optimizedPlan)
