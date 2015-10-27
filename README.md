@@ -11,7 +11,7 @@ To run (assuming tpchdir holds lineitem.tbl file):
 
 To launch an interactive Spark shell with Delite support (assuming Spark is installed in `../spark`):
 
-    java -cp target/scala-2.11/delite-playground-assembly-0.1.jar:../spark/assembly/target/scala-2.11/spark-assembly-1.5.1-hadoop2.2.0.jar -Dscala.usejavacp=true org.apache.spark.repl.Main
+    java -cp ~/.ivy2/cache/com.google.guava/guava/jars/guava-11.0.2.jar:target/scala-2.11/delite-playground-assembly-0.1.jar:../spark/assembly/target/scala-2.11/spark-assembly-1.5.1-hadoop2.2.0.jar -Dscala.usejavacp=true -noverify org.apache.spark.repl.Main
 
 But first, build and install the artifacts from the 
 [Hyperdsl](https://github.com/stanford-ppl/hyperdsl)
