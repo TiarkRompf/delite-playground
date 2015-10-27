@@ -4,7 +4,7 @@ Delite Playground
 This repository contains some example [Delite](http://stanford-ppl.github.io/Delite/) 
 and Spark programs.
 
-To run (assuming tpchdir holds lineitem.tbl file):
+To run (assuming tpchdir holds lineitem.csv file):
 
     sbt assembly
     java -jar java -jar target/scala-2.11/delite-playground-assembly-0.1.jar <tpchdir>
