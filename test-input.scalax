@@ -36,26 +36,11 @@ val res = df.filter("l_quantity > 1").select("l_partkey")
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.execution.datasources.LogicalRelation
 import org.apache.spark.sql.sources.BaseRelation
+import org.apache.spark.sql.DataFrame
 import com.databricks.spark.csv.CsvRelation
 import org.apache.spark.sql.catalyst.expressions._
 
 val lgr = "org.apache.spark.sql.execution.datasources.LogicalRelation"
-
-def compileRef(d: Expression): Any = d match {
-    case AttributeReference(name,dataType,nullable,metadata) =>
-        //println("#ref")
-        //println(name)
-    case Literal(value,dataType) =>
-        //println("#lit")
-        //println(value)
-}
-
-def compileExpr(d: Expression): Any = d match {
-    case GreaterThan(a,b) =>
-        //println("<")
-        compileRef(a)
-        compileRef(b)
-}
 
 import optiql.compiler._
 import optiql.library._
@@ -89,6 +74,18 @@ def runDelite(d: DataFrame): Any = {
 
         def println(x: Any) = System.out.println(x)
 
+        def compileRef(d: Expression)(rec: Rep[Any]): Rep[Double] = d match {
+            case AttributeReference(name,DoubleType,nullable,metadata) =>
+                field[Double](rec, name)
+            case Literal(value: Double,DoubleType) => unit(value)
+            case Literal(value: Int,IntegerType) => unit(value)
+        }
+
+        def compileExpr(d: Expression)(rec: Rep[Any]): Rep[Boolean] = d match {
+            case GreaterThan(a,b) =>
+              compileRef(a)(rec) > compileRef(b)(rec)
+        }
+
         def compile(d: LogicalPlan): Rep[Table[_]] = d match {
             case Project(projectList, child) => 
                 //println(projectList)
@@ -96,8 +93,11 @@ def runDelite(d: DataFrame): Any = {
                 compile(child)
             case Filter(condition, child) => 
                 //println("filter")
-                compileExpr(condition)
-                compile(child)
+                val res = compile(child).asInstanceOf[Rep[Table[Any]]]
+                val mf = extractMF(res)
+                table_where(res,{ (rec:Rep[Any]) =>
+                  compileExpr(condition)(rec)
+                })(mf, implicitly[SourceContext])
             case a: LeafNode if a.getClass.getName == lgr => 
                 // class LogicalRelation is private, so we use reflection
                 // to get around access control
@@ -106,10 +106,8 @@ def runDelite(d: DataFrame): Any = {
                 val relation = fld.get(a).asInstanceOf[BaseRelation]
                 relation match {
                     case relation: CsvRelation => 
-
                         println("schema:") 
                         println(relation.schema)
-
 /*
                         println("got it: ")
                         println(relation)
@@ -118,7 +116,6 @@ def runDelite(d: DataFrame): Any = {
                         println("delimiter:") 
                         println(relation.delimiter)
 */                        
-
                         trait TYPE
                         implicit val mf: Manifest[TYPE] = convertType(relation.schema).asInstanceOf[Manifest[TYPE]]
 
