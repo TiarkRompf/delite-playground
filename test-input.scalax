@@ -82,6 +82,8 @@ def runDelite(d: DataFrame): Any = {
         }
 
         def compileExpr(d: Expression)(rec: Rep[Any]): Rep[Boolean] = d match {
+            // case GreaterThan(a,b) if a.dataType == DoubleType && b.dataType == DoubleType =>
+
             case GreaterThan(a,b) =>
               compileRef(a)(rec) > compileRef(b)(rec)
         }
