@@ -81,12 +81,15 @@ def convertType(e: DataType): Manifest[_] = e match {
 
 def escapeDelim(c: Char) = if (c == '|') "\\|" else c.toString
 
-def runDelite(d: LogicalPlan): Any = {
+def runDelite(d: DataFrame): Any = {
 
     object DeliteQuery extends OptiQLApplicationCompiler with TPCHQ1Trait with DeliteTestRunner {
+
+        def extractMF[T](x: Rep[Table[T]]): Manifest[T] = x.tp.typeArguments.head.asInstanceOf[Manifest[T]]
+
         def println(x: Any) = System.out.println(x)
 
-        def compile(d: LogicalPlan): Any = d match {
+        def compile(d: LogicalPlan): Rep[Table[_]] = d match {
             case Project(projectList, child) => 
                 //println(projectList)
                 //println(projectList.map(_.getClass))
@@ -119,23 +122,24 @@ def runDelite(d: LogicalPlan): Any = {
                         trait TYPE
                         implicit val mf: Manifest[TYPE] = convertType(relation.schema).asInstanceOf[Manifest[TYPE]]
 
-                        val q = Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter))
-                        q.printAsTable()
+                        Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter))
 
-                    case _ =>
+                    //case _ =>
                         //println("unknown base relation: " + relation + "/" + relation.getClass)
                 }
-            case _ => 
+            //case _ => 
                 //println("unknown query operator: " + d.getClass)
         }
 
         override def main() {
             println("TPC-H ")
             tpchDataPath = unit("/Users/me/Downloads/dbtoaster/examples/data/tpch/")
-            compile(d)
+            val res = compile(d.queryExecution.optimizedPlan).asInstanceOf[Rep[Table[Any]]]
+            val mf = extractMF(res)
+            infix_printAsTable(res)(mf, implicitly[SourceContext])
         }
       }
     DeliteRunner.compileAndTest(DeliteQuery)
 }    
 
-runDelite(res.queryExecution.optimizedPlan)
+runDelite(res)
