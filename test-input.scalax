@@ -88,9 +88,16 @@ def runDelite(d: DataFrame): Any = {
 
         def compile(d: LogicalPlan): Rep[Table[_]] = d match {
             case Project(projectList, child) => 
-                //println(projectList)
+                println(projectList)
                 //println(projectList.map(_.getClass))
-                compile(child)
+                val res = compile(child)
+                /*
+                table_select(res, { rec => 
+                  record_new(projectList.map { p => 
+                    (getName(p), false, x => compileRef(p)(rec))
+                  })(mf, implicitly[SourceContext])
+                */
+                res
             case Filter(condition, child) => 
                 //println("filter")
                 val res = compile(child).asInstanceOf[Rep[Table[Any]]]
