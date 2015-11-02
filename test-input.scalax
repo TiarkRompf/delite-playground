@@ -43,49 +43,74 @@ val lgr = "org.apache.spark.sql.execution.datasources.LogicalRelation"
 
 def compileRef(d: Expression): Any = d match {
     case AttributeReference(name,dataType,nullable,metadata) =>
-        println("#ref")
-        println(name)
+        //println("#ref")
+        //println(name)
     case Literal(value,dataType) =>
-        println("#lit")
-        println(value)
+        //println("#lit")
+        //println(value)
 }
 
 def compileExpr(d: Expression): Any = d match {
     case GreaterThan(a,b) =>
-        println("<")
+        //println("<")
         compileRef(a)
         compileRef(b)
 }
 
-def compile(d: LogicalPlan): Any = d match {
-    case Project(projectList, child) => 
-        println(projectList)
-        println(projectList.map(_.getClass))
-        compile(child)
-    case Filter(condition, child) => 
-        println("filter")
-        compileExpr(condition)
-        compile(child)
-    case a: LeafNode if a.getClass.getName == lgr => 
-        // class LogicalRelation is private, so we use reflection
-        // to get around access control
-        val fld = a.getClass.getDeclaredFields.filter(_.getName == "relation").head
-        fld.setAccessible(true)
-        val relation = fld.get(a).asInstanceOf[BaseRelation]
-        relation match {
-            case relation: CsvRelation => 
-                println("got it: " + relation)
-                println("schema:") 
-                println(relation.schema)
-                println("location:") 
-                println(relation.location)
-                println("delimiter:") 
-                println(relation.delimiter)
-            case _ =>
-                println("unknown base relation: " + relation + "/" + relation.getClass)
-        }
-    case _ => 
-        println("unknown query operator: " + d.getClass)
-}
+import optiql.compiler._
+import optiql.library._
+import optiql.shared._
+import scala.reflect.{Manifest,SourceContext}
+import scala.virtualization.lms.common.Record
 
-compile(res.queryExecution.optimizedPlan)
+def runDelite(d: LogicalPlan): Any = {
+
+    object DeliteQuery extends OptiQLApplicationCompiler with TPCHQ1Trait with DeliteTestRunner {
+        def println(x: Any) = Console.println(x)
+
+        def compile(d: LogicalPlan): Any = d match {
+            case Project(projectList, child) => 
+                //println(projectList)
+                //println(projectList.map(_.getClass))
+                compile(child)
+            case Filter(condition, child) => 
+                //println("filter")
+                compileExpr(condition)
+                compile(child)
+            case a: LeafNode if a.getClass.getName == lgr => 
+                // class LogicalRelation is private, so we use reflection
+                // to get around access control
+                val fld = a.getClass.getDeclaredFields.filter(_.getName == "relation").head
+                fld.setAccessible(true)
+                val relation = fld.get(a).asInstanceOf[BaseRelation]
+                relation match {
+                    case relation: CsvRelation => 
+/*
+                        println("got it: " + relation)
+                        println("schema:") 
+                        println(relation.schema)
+                        println("location:") 
+                        println(relation.location)
+                        println("delimiter:") 
+                        println(relation.delimiter)
+*/
+                        val q = loadLineItems()
+                        q.printAsTable()
+
+                    case _ =>
+                        //println("unknown base relation: " + relation + "/" + relation.getClass)
+                }
+            case _ => 
+                //println("unknown query operator: " + d.getClass)
+        }
+
+        override def main() {
+            println("TPC-H ")
+            tpchDataPath = unit("/Users/me/Downloads/dbtoaster/examples/data/tpch/")
+            compile(d)
+        }
+      }
+    DeliteRunner.compileAndTest(DeliteQuery)
+}    
+
+runDelite(res.queryExecution.optimizedPlan)
