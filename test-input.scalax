@@ -63,10 +63,28 @@ import optiql.shared._
 import scala.reflect.{Manifest,SourceContext}
 import scala.virtualization.lms.common.Record
 
+
+def convertType(e: DataType): Manifest[_] = e match {
+  case IntegerType => manifest[Int]
+  case DoubleType => manifest[Double]
+  case DateType => manifest[java.util.Date]
+  case StringType => manifest[String]
+  case StructType(fields) => 
+    val names = fields map { 
+      case StructField(name,tpe,nullable,metadata) => name
+    }
+    val elems = fields map { 
+      case StructField(name,tpe,nullable,metadata) => convertType(tpe)
+    }
+    ManifestFactory.refinedType[Int](manifest[Record], names.toList, elems.toList)
+}
+
+def escapeDelim(c: Char) = if (c == '|') "\\|" else c.toString
+
 def runDelite(d: LogicalPlan): Any = {
 
     object DeliteQuery extends OptiQLApplicationCompiler with TPCHQ1Trait with DeliteTestRunner {
-        def println(x: Any) = Console.println(x)
+        def println(x: Any) = System.out.println(x)
 
         def compile(d: LogicalPlan): Any = d match {
             case Project(projectList, child) => 
@@ -85,16 +103,23 @@ def runDelite(d: LogicalPlan): Any = {
                 val relation = fld.get(a).asInstanceOf[BaseRelation]
                 relation match {
                     case relation: CsvRelation => 
-/*
-                        println("got it: " + relation)
+
                         println("schema:") 
                         println(relation.schema)
+
+/*
+                        println("got it: ")
+                        println(relation)
                         println("location:") 
                         println(relation.location)
                         println("delimiter:") 
                         println(relation.delimiter)
-*/
-                        val q = loadLineItems()
+*/                        
+
+                        trait TYPE
+                        implicit val mf: Manifest[TYPE] = convertType(relation.schema).asInstanceOf[Manifest[TYPE]]
+
+                        val q = Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter))
                         q.printAsTable()
 
                     case _ =>
