@@ -1,6 +1,7 @@
 // test -- this can be run from the repl
 
-val file = "/Users/me/Downloads/dbtoaster/examples/data/tpch/lineitem.csv"
+val folder = "/home/greg/Research/delite-playground/"
+val file = folder + "lineitem.csv"
 
 import org.apache.spark.sql.types._
 
@@ -45,8 +46,9 @@ val lgr = "org.apache.spark.sql.execution.datasources.LogicalRelation"
 import optiql.compiler._
 import optiql.library._
 import optiql.shared._
-import scala.reflect.{Manifest,SourceContext}
+import scala.reflect.{Manifest,SourceContext,ManifestFactory}
 import scala.virtualization.lms.common.Record
+import playground._
 
 
 def convertType(e: DataType): Manifest[_] = e match {
@@ -54,11 +56,11 @@ def convertType(e: DataType): Manifest[_] = e match {
   case DoubleType => manifest[Double]
   case DateType => manifest[java.util.Date]
   case StringType => manifest[String]
-  case StructType(fields) => 
-    val names = fields map { 
+  case StructType(fields) =>
+    val names = fields map {
       case StructField(name,tpe,nullable,metadata) => name
     }
-    val elems = fields map { 
+    val elems = fields map {
       case StructField(name,tpe,nullable,metadata) => convertType(tpe)
     }
     ManifestFactory.refinedType[Int](manifest[Record], names.toList, elems.toList)
@@ -89,42 +91,42 @@ def runDelite(d: DataFrame): Any = {
         }
 
         def compile(d: LogicalPlan): Rep[Table[_]] = d match {
-            case Project(projectList, child) => 
+            case Project(projectList, child) =>
                 println(projectList)
                 //println(projectList.map(_.getClass))
                 val res = compile(child)
                 /*
-                table_select(res, { rec => 
-                  record_new(projectList.map { p => 
+                table_select(res, { rec =>
+                  record_new(projectList.map { p =>
                     (getName(p), false, x => compileRef(p)(rec))
                   })(mf, implicitly[SourceContext])
                 */
                 res
-            case Filter(condition, child) => 
+            case Filter(condition, child) =>
                 //println("filter")
                 val res = compile(child).asInstanceOf[Rep[Table[Any]]]
                 val mf = extractMF(res)
                 table_where(res,{ (rec:Rep[Any]) =>
                   compileExpr(condition)(rec)
                 })(mf, implicitly[SourceContext])
-            case a: LeafNode if a.getClass.getName == lgr => 
+            case a: LeafNode if a.getClass.getName == lgr =>
                 // class LogicalRelation is private, so we use reflection
                 // to get around access control
                 val fld = a.getClass.getDeclaredFields.filter(_.getName == "relation").head
                 fld.setAccessible(true)
                 val relation = fld.get(a).asInstanceOf[BaseRelation]
                 relation match {
-                    case relation: CsvRelation => 
-                        println("schema:") 
+                    case relation: CsvRelation =>
+                        println("schema:")
                         println(relation.schema)
 /*
                         println("got it: ")
                         println(relation)
-                        println("location:") 
+                        println("location:")
                         println(relation.location)
-                        println("delimiter:") 
+                        println("delimiter:")
                         println(relation.delimiter)
-*/                        
+*/
                         trait TYPE
                         implicit val mf: Manifest[TYPE] = convertType(relation.schema).asInstanceOf[Manifest[TYPE]]
 
@@ -133,19 +135,19 @@ def runDelite(d: DataFrame): Any = {
                     //case _ =>
                         //println("unknown base relation: " + relation + "/" + relation.getClass)
                 }
-            //case _ => 
+            //case _ =>
                 //println("unknown query operator: " + d.getClass)
         }
 
         override def main() {
             println("TPC-H ")
-            tpchDataPath = unit("/Users/me/Downloads/dbtoaster/examples/data/tpch/")
+            tpchDataPath = unit(folder)
             val res = compile(d.queryExecution.optimizedPlan).asInstanceOf[Rep[Table[Any]]]
             val mf = extractMF(res)
             infix_printAsTable(res)(mf, implicitly[SourceContext])
         }
       }
-    DeliteRunner.compileAndTest(DeliteQuery)
-}    
+      DeliteRunner.compileAndTest(DeliteQuery)
+}
 
 runDelite(res)

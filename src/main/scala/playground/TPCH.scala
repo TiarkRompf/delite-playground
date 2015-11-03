@@ -213,7 +213,7 @@ trait TPCHBaseTrait extends OptiQLApplication with Types {
   }
 
   val queryName: String
-  
+
   var tpchDataPath: Rep[String] = _
   val sep = "\\|"
   def loadLineItems() = Table.fromFile[LineItem](tpchDataPath+"/lineitem.csv", sep)
@@ -224,13 +224,13 @@ trait TPCHBaseTrait extends OptiQLApplication with Types {
   def loadPartSuppliers() = Table.fromFile[PartSupplier](tpchDataPath+"/partsupp.tbl", sep)
   def loadRegions() = Table.fromFile[Region](tpchDataPath+"/region.tbl", sep)
   def loadSuppliers() = Table.fromFile[Supplier](tpchDataPath+"/supplier.tbl", sep)
-  
+
   def query(): Rep[_]
-  
+
   def main() = {
     println("TPC-H " + queryName)
     if (args.length < 1) printUsage
-    
+
     tpchDataPath = args(0)
     query()
   }
@@ -240,10 +240,10 @@ trait TPCHBaseTrait extends OptiQLApplication with Types {
 
 trait TPCHQ1Trait extends TPCHBaseTrait {
 
-  val queryName = "Q1"  
-  def query() = {  
+  val queryName = "Q1"
+  def query() = {
 
-    val lineItems = loadLineItems()         
+    val lineItems = loadLineItems()
     tic(lineItems.size)
 
     val q = lineItems Where(_.l_shipdate <= Date("1998-12-01")) GroupBy(l => pack(l.l_returnflag,l.l_linestatus)) Select(g => new Record {
@@ -258,11 +258,11 @@ trait TPCHQ1Trait extends TPCHBaseTrait {
       val avgDiscount = g.values.Average(_.l_discount)
       val countOrder = g.values.Count
     }) OrderBy(asc(_.returnFlag), asc(_.lineStatus))
-    
+
     toc(q)
     q.printAsTable()
     //q.writeAsJSON("out.json")
-  }    
+  }
 }
 
 
@@ -274,7 +274,7 @@ trait TPCHQ6Trait extends TPCHBaseTrait {
     tic(lineItems.size)
 
     //FIXME: infix_&& fails to resolve automatically
-    val q = lineItems Where (l => infix_&&(l.l_shipdate >= Date("1994-01-01"), infix_&&(l.l_shipdate < Date("1995-01-01"), infix_&&(l.l_discount >= 0.05, infix_&&(l.l_discount <= 0.07, l.l_quantity < 24))))) 
+    val q = lineItems Where (l => infix_&&(l.l_shipdate >= Date("1994-01-01"), infix_&&(l.l_shipdate < Date("1995-01-01"), infix_&&(l.l_discount >= 0.05, infix_&&(l.l_discount <= 0.07, l.l_quantity < 24)))))
     val revenue = q.Sum(l => l.l_extendedprice * l.l_discount)
 
     toc(revenue)
@@ -289,7 +289,7 @@ trait TPCHQ14Trait extends TPCHBaseTrait {
     val parts = loadParts(); val lineItems = loadLineItems()
     tic(parts.size, lineItems.size)
 
-    val shippedItems = lineItems.Where(li => li.l_shipdate >= Date("1995-09-01") && li.l_shipdate < Date("1995-10-01"))    
+    val shippedItems = lineItems.Where(li => li.l_shipdate >= Date("1995-09-01") && li.l_shipdate < Date("1995-10-01"))
     val q = parts.Join(shippedItems)(_.p_partkey, _.l_partkey)(
       (p,l) => new Record { //this post-Join Select is very boilerplate but we need to get the type right
         val l_extendedprice = l.l_extendedprice
@@ -311,8 +311,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.spark.SparkConf
 
-
-
 object Q1_Runner {
 
   def testRun(base: String) = {
@@ -323,15 +321,15 @@ object Q1_Runner {
         query()
       }
     }
-    DeliteRunner.compileAndTest(TPCHQ1Compiler)
+  DeliteRunner.compileAndTest(TPCHQ1Compiler)
   }
 
-	def main(args: Array[String]) {
+  def main(args: Array[String]) {
     if (args.length < 1) error("usage: need base dir as argument")
 
     val conf = new SparkConf().setAppName("Simple Application").setMaster("local[1]")
     val sc = new SparkContext(conf)
 
     testRun(args(0))
-	}
+  }
 }
