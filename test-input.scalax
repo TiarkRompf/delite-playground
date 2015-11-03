@@ -70,84 +70,91 @@ def escapeDelim(c: Char) = if (c == '|') "\\|" else c.toString
 
 def runDelite(d: DataFrame): Any = {
 
-    object DeliteQuery extends OptiQLApplicationCompiler with TPCHQ1Trait with DeliteTestRunner {
+  object DeliteQuery extends OptiQLApplicationCompiler with TPCHQ1Trait with DeliteTestRunner {
 
-        def extractMF[T](x: Rep[Table[T]]): Manifest[T] = x.tp.typeArguments.head.asInstanceOf[Manifest[T]]
+    def extractMF[T](x: Rep[Table[T]]): Manifest[T] = x.tp.typeArguments.head.asInstanceOf[Manifest[T]]
 
-        def println(x: Any) = System.out.println(x)
+    def println(x: Any) = System.out.println(x)
 
-        def compileRef(d: Expression)(rec: Rep[Any]): Rep[Double] = d match {
-            case AttributeReference(name,DoubleType,nullable,metadata) =>
-                field[Double](rec, name)
-            case Literal(value: Double,DoubleType) => unit(value)
-            case Literal(value: Int,IntegerType) => unit(value)
-        }
+    def compileRef(d: Expression)(rec: Rep[Any]): Rep[Double] = d match {
+      case AttributeReference(name,DoubleType,nullable,metadata) =>
+        field[Double](rec, name)
+      case AttributeReference(name,IntegerType,nullable,metadata) =>
+        field[Int](rec, name)
+      case Literal(value: Double,DoubleType) => unit(value)
+      case Literal(value: Int,IntegerType) => unit(value)
+    }
 
-        def compileExpr(d: Expression)(rec: Rep[Any]): Rep[Boolean] = d match {
-            // case GreaterThan(a,b) if a.dataType == DoubleType && b.dataType == DoubleType =>
+    def compileExpr(d: Expression)(rec: Rep[Any]): Rep[Boolean] = d match {
+      // case GreaterThan(a,b) if a.dataType == DoubleType && b.dataType == DoubleType =>
 
-            case GreaterThan(a,b) =>
-              compileRef(a)(rec) > compileRef(b)(rec)
-        }
+      case GreaterThan(a,b) =>
+        compileRef(a)(rec) > compileRef(b)(rec)
+    }
 
-        def compile(d: LogicalPlan): Rep[Table[_]] = d match {
-            case Project(projectList, child) =>
-                println(projectList)
-                //println(projectList.map(_.getClass))
-                val res = compile(child)
-                /*
-                table_select(res, { rec =>
-                  record_new(projectList.map { p =>
-                    (getName(p), false, x => compileRef(p)(rec))
-                  })(mf, implicitly[SourceContext])
-                */
-                res
-            case Filter(condition, child) =>
-                //println("filter")
-                val res = compile(child).asInstanceOf[Rep[Table[Any]]]
-                val mf = extractMF(res)
-                table_where(res,{ (rec:Rep[Any]) =>
-                  compileExpr(condition)(rec)
-                })(mf, implicitly[SourceContext])
-            case a: LeafNode if a.getClass.getName == lgr =>
-                // class LogicalRelation is private, so we use reflection
-                // to get around access control
-                val fld = a.getClass.getDeclaredFields.filter(_.getName == "relation").head
-                fld.setAccessible(true)
-                val relation = fld.get(a).asInstanceOf[BaseRelation]
-                relation match {
-                    case relation: CsvRelation =>
-                        println("schema:")
-                        println(relation.schema)
-/*
-                        println("got it: ")
-                        println(relation)
-                        println("location:")
-                        println(relation.location)
-                        println("delimiter:")
-                        println(relation.delimiter)
-*/
-                        trait TYPE
-                        implicit val mf: Manifest[TYPE] = convertType(relation.schema).asInstanceOf[Manifest[TYPE]]
+    def getName(p: NamedExpression): String = p match {
+      case AttributeReference(name, t, nullable, metadata) =>
+        println(name)
+        name
+      case _ => "TODO"
+    }
 
-                        Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter))
+    def compile(d: LogicalPlan): Rep[Table[_]] = d match {
+      case Project(projectList, child) =>
+        println(projectList)
+        // println(projectList.map(p => getName(p)))
+        val res = compile(child).asInstanceOf[Rep[Table[Any]]]
+        implicit val mf = extractMF(res)
+        table_select(res, { (rec:Rep[Any]) =>
+          record_new(projectList.map { (p:NamedExpression) =>
+            (getName(p), false, (x:Any) => compileRef(p)(rec))
+          })}) // (mf, implicitly[SourceContext])})
+      case Filter(condition, child) =>
+        //println("filter")
+        val res = compile(child).asInstanceOf[Rep[Table[Any]]]
+        val mf = extractMF(res)
+        table_where(res,{ (rec:Rep[Any]) =>
+          compileExpr(condition)(rec)
+        })(mf, implicitly[SourceContext])
+      case a: LeafNode if a.getClass.getName == lgr =>
+        // class LogicalRelation is private, so we use reflection
+        // to get around access control
+        val fld = a.getClass.getDeclaredFields.filter(_.getName == "relation").head
+        fld.setAccessible(true)
+        val relation = fld.get(a).asInstanceOf[BaseRelation]
+        relation match {
+          case relation: CsvRelation =>
+            println("schema:")
+            println(relation.schema)
+            /*
+            println("got it: ")
+            println(relation)
+            println("location:")
+            println(relation.location)
+            println("delimiter:")
+            println(relation.delimiter)
+             */
+            trait TYPE
+            implicit val mf: Manifest[TYPE] = convertType(relation.schema).asInstanceOf[Manifest[TYPE]]
 
-                    //case _ =>
-                        //println("unknown base relation: " + relation + "/" + relation.getClass)
-                }
+            Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter))
+
             //case _ =>
-                //println("unknown query operator: " + d.getClass)
+            //println("unknown base relation: " + relation + "/" + relation.getClass)
+        }
+        //case _ =>
+        //println("unknown query operator: " + d.getClass)
         }
 
         override def main() {
-            println("TPC-H ")
-            tpchDataPath = unit(folder)
-            val res = compile(d.queryExecution.optimizedPlan).asInstanceOf[Rep[Table[Any]]]
-            val mf = extractMF(res)
-            infix_printAsTable(res)(mf, implicitly[SourceContext])
+          println("TPC-H ")
+          tpchDataPath = unit(folder)
+          val res = compile(d.queryExecution.optimizedPlan).asInstanceOf[Rep[Table[Any]]]
+          val mf = extractMF(res)
+          infix_printAsTable(res)(mf, implicitly[SourceContext])
         }
-      }
-      DeliteRunner.compileAndTest(DeliteQuery)
-}
+    }
+    DeliteRunner.compileAndTest(DeliteQuery)
+  }
 
 runDelite(res)
