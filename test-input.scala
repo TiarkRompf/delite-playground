@@ -79,7 +79,7 @@ def runDelite(d: DataFrame): Any = {
     def compileRef[T:Manifest](d: Expression)(rec: Rep[Any]): Rep[T] = d match {
       case AttributeReference(name, tpe,nullable,metadata) =>
         field[T](rec, name)
-      case Literal(value: T, tpe) => unit(value)
+      case Literal(value: T, tpe) => unit[T](value)
     }
 
     def compileExpr(d: Expression)(rec: Rep[Any]): Rep[Boolean] = d match {
@@ -103,7 +103,8 @@ def runDelite(d: DataFrame): Any = {
         implicit val mf = extractMF(res)
         table_select(res, { (rec:Rep[Any]) =>
           record_new(projectList.map { (p:NamedExpression) =>
-            (getName(p), false, (x:Any) => compileRef(p)(rec))
+            val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
+            (getName(p), false, (x:Any) => compileRef[Any](p)(rec)(mfp))
         })}) // (mf, implicitly[SourceContext])})
       case Filter(condition, child) =>
         //println("filter")
@@ -140,17 +141,27 @@ def runDelite(d: DataFrame): Any = {
         }
         //case _ =>
         //println("unknown query operator: " + d.getClass)
-  }
+    }
 
-override def main() {
-  println("TPC-H ")
-  tpchDataPath = unit(folder)
-  val res = compile(d.queryExecution.optimizedPlan).asInstanceOf[Rep[Table[Any]]]
-  val mf = extractMF(res)
-  infix_printAsTable(res)(mf, implicitly[SourceContext])
-}
-}
-DeliteRunner.compileAndTest(DeliteQuery)
+    override def main() {
+      println("TPC-H ")
+      tpchDataPath = unit(folder)
+      val res = compile(d.queryExecution.optimizedPlan).asInstanceOf[Rep[Table[Any]]]
+      val mf = extractMF(res)
+      infix_printAsTable(res)(mf, implicitly[SourceContext])
+    }
   }
+  DeliteRunner.compileAndTest(DeliteQuery)
+}
 
 runDelite(res)
+
+
+// test sql
+
+df.registerTempTable("lineitem")
+
+def deliteSQL(s: String) = runDelite(sqlContext.sql(s))
+
+deliteSQL("select l_quantity from lineitem where l_quantity > 45")
+

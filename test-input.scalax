@@ -1,6 +1,7 @@
 // test -- this can be run from the repl
 
-val folder = "/home/greg/Research/delite-playground/"
+val folder = "/Users/me/Downloads/dbtoaster/examples/data/tpch/"
+//val folder = "/home/greg/Research/delite-playground/"
 val file = folder + "lineitem.csv"
 
 import org.apache.spark.sql.types._
@@ -31,8 +32,7 @@ val df = (sqlContext.read
     .schema(schema)
     .load(file))
 
-val res = df.filter("l_quantity > 1").select("l_partkey")
-
+val res = df.filter("l_quantity > 40").select("l_partkey")
 
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.execution.datasources.LogicalRelation
@@ -158,3 +158,10 @@ def runDelite(d: DataFrame): Any = {
   }
 
 runDelite(res)
+
+df.registerTempTable("lineitem")
+
+def deliteSQL(s: String) = runDelite(sqlContext.sql(s))
+
+deliteSQL("select l_quantity from lineitem where l_quantity > 45")
+
