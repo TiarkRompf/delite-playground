@@ -31,7 +31,7 @@ val df = (sqlContext.read
   .schema(schema)
   .load(file))
 
-val res = df.filter("l_quantity > 45").select("l_partkey")
+val res = df.filter("l_quantity > 49").select("l_partkey").agg(sum("l_partkey"))
 
 
 import org.apache.spark.sql.catalyst.plans.logical._
@@ -72,30 +72,44 @@ def runDelite(d: DataFrame): Any = {
 
   object DeliteQuery extends OptiQLApplicationCompiler with TPCHQ1Trait with DeliteTestRunner {
 
-    def extractMF[T](x: Rep[Table[T]]): Manifest[T] = x.tp.typeArguments.head.asInstanceOf[Manifest[T]]
+    def extractMF[T](x: Rep[Table[T]]): Manifest[T] = {
+      x.tp.typeArguments.head.asInstanceOf[Manifest[T]]
+    }
 
     def println(x: Any) = System.out.println(x)
 
-    def compileRef[T:Manifest](d: Expression)(rec: Rep[Any]): Rep[T] = d match {
-      case AttributeReference(name, tpe,nullable,metadata) =>
+    def compileExpr[T:Manifest](d: Expression)(rec: Rep[Any]): Rep[T] = d match {
+      case AttributeReference(name, _, _, _) =>
         field[T](rec, name)
-      case Literal(value: T, tpe) => unit[T](value)
+      case Literal(value: T, _) => unit[T](value)
+      case GreaterThan(a,b) =>
+        val bo = a.dataType match {
+          case DoubleType => compileExpr[Double](a)(rec) > compileExpr[Double](b)(rec)
+        }
+        bo.asInstanceOf[Rep[T]]
+      case Alias(child, _) => compileExpr[T](child)(rec)
+      case Sum(child) =>
+        println("sum")
+        Table[Int](rec.asInstanceOf[Rep[Table[Int]]].Sum(l => compileExpr[Int](child)(l)), 1).asInstanceOf[Rep[T]]
+      case Cast(child, dataType) =>
+        println("cast")
+        compileExpr[T](child)(rec)
+      case _ =>
+        println("TODO: " + getName(d))
+        rec.asInstanceOf[Rep[T]]
     }
 
-    def compileExpr(d: Expression)(rec: Rep[Any]): Rep[Boolean] = d match {
-      case GreaterThan(a,b) if a.dataType == DoubleType && b.dataType == DoubleType =>
-        // implicit val mf: Manifest[Double] = convertType(DoubleType).asInstanceOf[Manifest[Double]]
-        compileRef[Double](a)(rec) > compileRef[Double](b)(rec)
-    }
-
-    def getName(p: NamedExpression): String = p match {
-      case AttributeReference(name, t, nullable, metadata) =>
-        println(name)
-        name
-      case _ => "TODO"
+    def getName(p: Expression): String = p match {
+      case AttributeReference(name, _, _, _) => name
+      case Alias(child, _) => getName(child)
+      case _ => p.getClass().getName()
     }
 
     def compile(d: LogicalPlan): Rep[Table[_]] = d match {
+      case Aggregate(groupingExpr, aggregateExpr, child) =>
+        // println(aggregateExpr.map(p => getName(p)))
+        val res = compile(child)
+        compileExpr[Table[_]](aggregateExpr.head)(res)
       case Project(projectList, child) =>
         println(projectList)
         // println(projectList.map(p => getName(p)))
@@ -104,14 +118,13 @@ def runDelite(d: DataFrame): Any = {
         table_select(res, { (rec:Rep[Any]) =>
           record_new(projectList.map { (p:NamedExpression) =>
             val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
-            (getName(p), false, (x:Any) => compileRef[Any](p)(rec)(mfp))
+            (getName(p), false, (x:Any) => compileExpr[Any](p)(rec)(mfp))
         })}) // (mf, implicitly[SourceContext])})
       case Filter(condition, child) =>
-        //println("filter")
         val res = compile(child).asInstanceOf[Rep[Table[Any]]]
         val mf = extractMF(res)
         table_where(res,{ (rec:Rep[Any]) =>
-          compileExpr(condition)(rec)
+          compileExpr[Boolean](condition)(rec)
         })(mf, implicitly[SourceContext])
       case a: LeafNode if a.getClass.getName == lgr =>
         // class LogicalRelation is private, so we use reflection
@@ -155,7 +168,7 @@ def runDelite(d: DataFrame): Any = {
 }
 
 runDelite(res)
-
+res.show()
 
 // test sql
 

@@ -7,27 +7,27 @@ val file = folder + "lineitem.csv"
 import org.apache.spark.sql.types._
 
 val schema = StructType(Seq(
-    StructField("l_orderkey", IntegerType, true), 
-    StructField("l_partkey", IntegerType, true), 
-    StructField("l_suppkey", IntegerType, true), 
-    StructField("l_linenumber", IntegerType, true), 
-    StructField("l_quantity", DoubleType, true), 
-    StructField("l_extendedprice", DoubleType, true), 
-    StructField("l_discount", DoubleType, true), 
-    StructField("l_tax", DoubleType, true), 
+    StructField("l_orderkey", IntegerType, true),
+    StructField("l_partkey", IntegerType, true),
+    StructField("l_suppkey", IntegerType, true),
+    StructField("l_linenumber", IntegerType, true),
+    StructField("l_quantity", DoubleType, true),
+    StructField("l_extendedprice", DoubleType, true),
+    StructField("l_discount", DoubleType, true),
+    StructField("l_tax", DoubleType, true),
     StructField("l_returnflag", StringType, true), // Char
-    StructField("l_linestatus", StringType, true), 
-    StructField("l_shipdate", DateType, true), 
-    StructField("l_commitdate", DateType, true), 
-    StructField("l_receiptdate", DateType, true), 
-    StructField("l_shipinstruct", StringType, true), 
-    StructField("l_shipmode", StringType, true), 
+    StructField("l_linestatus", StringType, true),
+    StructField("l_shipdate", DateType, true),
+    StructField("l_commitdate", DateType, true),
+    StructField("l_receiptdate", DateType, true),
+    StructField("l_shipinstruct", StringType, true),
+    StructField("l_shipmode", StringType, true),
     StructField("l_comment", StringType, true)))
 
 val df = (sqlContext.read
     .format("com.databricks.spark.csv")
     .option("delimiter", "|")
-    .option("header", "false") // Use first line of all files as header    
+    .option("header", "false") // Use first line of all files as header
     .option("inferSchema", "false") // Automatically infer data types
     .schema(schema)
     .load(file))
