@@ -83,6 +83,8 @@ def runDelite(d: DataFrame): Any = {
       case AttributeReference(name, _, _, _) =>
         field[T](rec, name)
       case Literal(value: T, _) => unit[T](value)
+      case And(left, right) =>
+        infix_&&(compileExpr[Boolean](left)(rec), compileExpr[Boolean](right)(rec)).asInstanceOf[Rep[T]]
       case LessThan(a,b) =>
         val bo = a.dataType match {
           case FloatType    => compileExpr[Float](a)(rec) < compileExpr[Float](b)(rec)
@@ -138,7 +140,6 @@ def runDelite(d: DataFrame): Any = {
         }
         res.asInstanceOf[Rep[T]]
       case Cast(child, dataType) =>
-        println("cast")
         compileExpr[T](child)(rec)
       case Add(left, right) =>
         val res = left.dataType match {
@@ -179,6 +180,7 @@ def runDelite(d: DataFrame): Any = {
 
       case _ =>
         println("TODO: " + getName(d))
+        println("TODO: " + d.dataType)
         rec.asInstanceOf[Rep[T]]
     }
 
@@ -250,20 +252,18 @@ def runDelite(d: DataFrame): Any = {
   DeliteRunner.compileAndTest(DeliteQuery)
 }
 
-runDelite(res)
-res.show()
+//runDelite(res)
+// res.show()
 
 // test sql
 
-df.registerTempTable("lineitem")
+//df.registerTempTable("lineitem")
 
 def deliteSQL(s: String) = runDelite(sqlContext.sql(s))
 
 // deliteSQL("select l_quantity from lineitem where l_quantity > 45")
 
 // TPCH - 6
-// val q = lineItems Where (l => infix_&&(l.l_shipdate >= Date("1994-01-01"), infix_&&(l.l_shipdate < Date("1995-01-01"), infix_&&(l.l_discount >= 0.05, infix_&&(l.l_discount <= 0.07, l.l_quantity < 24)))))
-// val revenue = q.Sum(l => l.l_extendedprice * l.l_discount)
 
 val tpch6df = (sqlContext.read
   .format("com.databricks.spark.csv")
@@ -273,5 +273,9 @@ val tpch6df = (sqlContext.read
   .schema(schema)
   .load(file))
 
-val tpch6res = tpch6df.where(tpch6df("l_shipdate") >= "1994-01-01" && tpch6df("l_shipdate") < "1994-01-01")
+val tpch6res = tpch6df.where(tpch6df("l_shipdate") >= "1994-01-01" && tpch6df("l_shipdate") < "1995-01-01" && tpch6df("l_discount") >= 0.05 && tpch6df("l_discount") <= 0.07 && tpch6df("l_quantity") < 24).agg(sum(tpch6df("l_extendedprice") * tpch6df("l_discount")))
+
+runDelite(tpch6res)
+
+tpch6res.show()
 
