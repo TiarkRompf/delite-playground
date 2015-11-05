@@ -31,8 +31,8 @@ val df = (sqlContext.read
   .schema(schema)
   .load(file))
 
-val res = df.filter("l_quantity > 49").select("l_partkey").agg(sum("l_partkey"))
-
+val dffilt = df.filter("l_quantity > 49")
+val res = dffilt.agg(sum(dffilt("l_quantity") * dffilt("l_linenumber")))
 
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.execution.datasources.LogicalRelation
@@ -87,13 +87,36 @@ def runDelite(d: DataFrame): Any = {
           case DoubleType => compileExpr[Double](a)(rec) > compileExpr[Double](b)(rec)
         }
         bo.asInstanceOf[Rep[T]]
-      case Alias(child, _) => compileExpr[T](child)(rec)
+      case Alias(child, name) =>
+        compileExpr[T](child)(rec)
       case Sum(child) =>
-        println("sum")
-        Table[Int](rec.asInstanceOf[Rep[Table[Int]]].Sum(l => compileExpr[Int](child)(l)), 1).asInstanceOf[Rep[T]]
+        val res = child.dataType match {
+          case FloatType  =>
+            table_object_apply(Seq(rec.asInstanceOf[Rep[Table[Float]]].Sum(l => compileExpr[Float](child)(l))))
+          case DoubleType  =>
+            table_object_apply(Seq(rec.asInstanceOf[Rep[Table[Double]]].Sum(l => compileExpr[Double](child)(l))))
+          case IntegerType =>
+            table_object_apply(Seq(rec.asInstanceOf[Rep[Table[Int]]].Sum(l => compileExpr[Int](child)(l))))
+          case LongType =>
+            table_object_apply(Seq(rec.asInstanceOf[Rep[Table[Long]]].Sum(l => compileExpr[Long](child)(l))))
+        }
+        res.asInstanceOf[Rep[T]]
       case Cast(child, dataType) =>
         println("cast")
         compileExpr[T](child)(rec)
+      case Multiply(left, right) =>
+        val res = left.dataType match {
+          case FloatType  =>
+            compileExpr[Float](left)(rec) * compileExpr[Float](right)(rec)
+          case DoubleType  =>
+            compileExpr[Double](left)(rec) * compileExpr[Double](right)(rec)
+          case IntegerType =>
+            compileExpr[Int](left)(rec) * compileExpr[Int](right)(rec)
+          case LongType =>
+            compileExpr[Long](left)(rec) * compileExpr[Long](right)(rec)
+        }
+        res.asInstanceOf[Rep[T]]
+
       case _ =>
         println("TODO: " + getName(d))
         rec.asInstanceOf[Rep[T]]
