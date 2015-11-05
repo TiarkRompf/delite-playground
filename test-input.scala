@@ -32,7 +32,7 @@ val df = (sqlContext.read
   .load(file))
 
 val dffilt = df.filter("l_quantity > 49")
-val res = dffilt.agg(sum(dffilt("l_quantity") * dffilt("l_linenumber")))
+val res = dffilt.agg(sum(dffilt("l_quantity") + dffilt("l_linenumber") - dffilt("l_orderkey")))
 
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.execution.datasources.LogicalRelation
@@ -104,6 +104,30 @@ def runDelite(d: DataFrame): Any = {
       case Cast(child, dataType) =>
         println("cast")
         compileExpr[T](child)(rec)
+      case Add(left, right) =>
+        val res = left.dataType match {
+          case FloatType  =>
+            compileExpr[Float](left)(rec) + compileExpr[Float](right)(rec)
+          case DoubleType  =>
+            compileExpr[Double](left)(rec) + compileExpr[Double](right)(rec)
+          case IntegerType =>
+            compileExpr[Int](left)(rec) + compileExpr[Int](right)(rec)
+          case LongType =>
+            compileExpr[Long](left)(rec) + compileExpr[Long](right)(rec)
+        }
+        res.asInstanceOf[Rep[T]]
+      case Subtract(left, right) =>
+        val res = left.dataType match {
+          case FloatType  =>
+            compileExpr[Float](left)(rec) - compileExpr[Float](right)(rec)
+          case DoubleType  =>
+            compileExpr[Double](left)(rec) - compileExpr[Double](right)(rec)
+          case IntegerType =>
+            compileExpr[Int](left)(rec) - compileExpr[Int](right)(rec)
+          case LongType =>
+            compileExpr[Long](left)(rec) - compileExpr[Long](right)(rec)
+        }
+        res.asInstanceOf[Rep[T]]
       case Multiply(left, right) =>
         val res = left.dataType match {
           case FloatType  =>
@@ -199,5 +223,5 @@ df.registerTempTable("lineitem")
 
 def deliteSQL(s: String) = runDelite(sqlContext.sql(s))
 
-deliteSQL("select l_quantity from lineitem where l_quantity > 45")
+// deliteSQL("select l_quantity from lineitem where l_quantity > 45")
 
