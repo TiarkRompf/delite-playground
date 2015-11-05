@@ -1,6 +1,6 @@
 // test -- this can be run from the repl
 
-val folder = "/home/greg/Research/delite-playground/"
+val folder = sys.env("DELITE_PLAY") + "/data/"
 val file = folder + "lineitem.csv"
 
 import org.apache.spark.sql.types._
