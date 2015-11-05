@@ -52,6 +52,7 @@ import playground._
 
 
 def convertType(e: DataType): Manifest[_] = e match {
+  case ByteType => manifest[Char]
   case IntegerType => manifest[Int]
   case DoubleType => manifest[Double]
   case DateType => manifest[java.util.Date]
@@ -82,9 +83,44 @@ def runDelite(d: DataFrame): Any = {
       case AttributeReference(name, _, _, _) =>
         field[T](rec, name)
       case Literal(value: T, _) => unit[T](value)
+      case LessThan(a,b) =>
+        val bo = a.dataType match {
+          case FloatType    => compileExpr[Float](a)(rec) < compileExpr[Float](b)(rec)
+          case DoubleType   => compileExpr[Double](a)(rec) < compileExpr[Double](b)(rec)
+          case IntegerType  => compileExpr[Int](a)(rec) < compileExpr[Int](b)(rec)
+          case LongType     => compileExpr[Long](a)(rec) < compileExpr[Long](b)(rec)
+          case DateType     => compileExpr[java.util.Date](a)(rec) < compileExpr[java.util.Date](b)(rec)
+          case StringType   => compileExpr[String](a)(rec) < compileExpr[String](b)(rec)
+        }
+        bo.asInstanceOf[Rep[T]]
+      case LessThanOrEqual(a,b) =>
+        val bo = a.dataType match {
+          case FloatType    => compileExpr[Float](a)(rec) <= compileExpr[Float](b)(rec)
+          case DoubleType   => compileExpr[Double](a)(rec) <= compileExpr[Double](b)(rec)
+          case IntegerType  => compileExpr[Int](a)(rec) <= compileExpr[Int](b)(rec)
+          case LongType     => compileExpr[Long](a)(rec) <= compileExpr[Long](b)(rec)
+          case DateType     => compileExpr[java.util.Date](a)(rec) <= compileExpr[java.util.Date](b)(rec)
+          case StringType   => compileExpr[String](a)(rec) <= compileExpr[String](b)(rec)
+        }
+        bo.asInstanceOf[Rep[T]]
       case GreaterThan(a,b) =>
         val bo = a.dataType match {
-          case DoubleType => compileExpr[Double](a)(rec) > compileExpr[Double](b)(rec)
+          case FloatType    => compileExpr[Float](a)(rec) > compileExpr[Float](b)(rec)
+          case DoubleType   => compileExpr[Double](a)(rec) > compileExpr[Double](b)(rec)
+          case IntegerType  => compileExpr[Int](a)(rec) > compileExpr[Int](b)(rec)
+          case LongType     => compileExpr[Long](a)(rec) > compileExpr[Long](b)(rec)
+          case DateType     => compileExpr[java.util.Date](a)(rec) > compileExpr[java.util.Date](b)(rec)
+          case StringType   => compileExpr[String](a)(rec) > compileExpr[String](b)(rec)
+        }
+        bo.asInstanceOf[Rep[T]]
+      case GreaterThanOrEqual(a,b) =>
+        val bo = a.dataType match {
+          case FloatType    => compileExpr[Float](a)(rec) >= compileExpr[Float](b)(rec)
+          case DoubleType   => compileExpr[Double](a)(rec) >= compileExpr[Double](b)(rec)
+          case IntegerType  => compileExpr[Int](a)(rec) >= compileExpr[Int](b)(rec)
+          case LongType     => compileExpr[Long](a)(rec) >= compileExpr[Long](b)(rec)
+          case DateType     => compileExpr[java.util.Date](a)(rec) >= compileExpr[java.util.Date](b)(rec)
+          case StringType   => compileExpr[String](a)(rec) >= compileExpr[String](b)(rec)
         }
         bo.asInstanceOf[Rep[T]]
       case Alias(child, name) =>
@@ -224,4 +260,18 @@ df.registerTempTable("lineitem")
 def deliteSQL(s: String) = runDelite(sqlContext.sql(s))
 
 // deliteSQL("select l_quantity from lineitem where l_quantity > 45")
+
+// TPCH - 6
+// val q = lineItems Where (l => infix_&&(l.l_shipdate >= Date("1994-01-01"), infix_&&(l.l_shipdate < Date("1995-01-01"), infix_&&(l.l_discount >= 0.05, infix_&&(l.l_discount <= 0.07, l.l_quantity < 24)))))
+// val revenue = q.Sum(l => l.l_extendedprice * l.l_discount)
+
+val tpch6df = (sqlContext.read
+  .format("com.databricks.spark.csv")
+  .option("delimiter", "|")
+  .option("header", "false") // use first line of all files as header
+  .option("inferschema", "false") // automatically infer data types
+  .schema(schema)
+  .load(file))
+
+val tpch6res = tpch6df.where(tpch6df("l_shipdate") >= "1994-01-01" && tpch6df("l_shipdate") < "1994-01-01")
 
