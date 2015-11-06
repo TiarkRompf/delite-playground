@@ -4,6 +4,7 @@ val folder = sys.env("DELITE_PLAY") + "/data/"
 val file = folder + "lineitem.csv"
 
 import org.apache.spark.sql.types._
+import org.apache.spark.sql.functions._
 
 val schema = StructType(Seq(
   StructField("l_orderkey", IntegerType, true),
@@ -49,6 +50,9 @@ import optiql.shared._
 import scala.reflect.{Manifest,SourceContext,ManifestFactory}
 import scala.virtualization.lms.common.Record
 import playground._
+// import org.joda.time.DateTime
+import java.util._
+import java.text._
 
 
 def convertType(e: DataType): Manifest[_] = e match {
@@ -79,10 +83,20 @@ def runDelite(d: DataFrame): Any = {
 
     def println(x: Any) = System.out.println(x)
 
+    def conv_date(days: Int): Rep[Date] = {
+      val c = Calendar.getInstance();
+      c.setTime(new java.util.Date(0)); // set origin 1970-01-01.
+      c.add(Calendar.DAY_OF_YEAR, days + 1); // Adding the number of days
+      Date(primitive_forge_int_plus(primitive_forge_int_shift_left(c.get(Calendar.YEAR), unit(9)), primitive_forge_int_plus(primitive_forge_int_shift_left(c.get(Calendar.MONTH) + 1, unit(5)), c.get(Calendar.DATE))))
+    }
+
     def compileExpr[T:Manifest](d: Expression)(rec: Rep[Any]): Rep[T] = d match {
       case AttributeReference(name, _, _, _) =>
         field[T](rec, name)
-      case Literal(value: T, _) => unit[T](value)
+      case Literal(value, DateType) =>
+            conv_date(value.asInstanceOf[Int]).asInstanceOf[Rep[T]]
+      case Literal(value, _) =>
+        unit[T](value.asInstanceOf[T])
       case And(left, right) =>
         infix_&&(compileExpr[Boolean](left)(rec), compileExpr[Boolean](right)(rec)).asInstanceOf[Rep[T]]
       case LessThan(a,b) =>
@@ -91,7 +105,7 @@ def runDelite(d: DataFrame): Any = {
           case DoubleType   => compileExpr[Double](a)(rec) < compileExpr[Double](b)(rec)
           case IntegerType  => compileExpr[Int](a)(rec) < compileExpr[Int](b)(rec)
           case LongType     => compileExpr[Long](a)(rec) < compileExpr[Long](b)(rec)
-          case DateType     => compileExpr[java.util.Date](a)(rec) < compileExpr[java.util.Date](b)(rec)
+          case DateType     => compileExpr[Date](a)(rec) < compileExpr[Date](b)(rec)
           case StringType   => compileExpr[String](a)(rec) < compileExpr[String](b)(rec)
         }
         bo.asInstanceOf[Rep[T]]
@@ -101,7 +115,7 @@ def runDelite(d: DataFrame): Any = {
           case DoubleType   => compileExpr[Double](a)(rec) <= compileExpr[Double](b)(rec)
           case IntegerType  => compileExpr[Int](a)(rec) <= compileExpr[Int](b)(rec)
           case LongType     => compileExpr[Long](a)(rec) <= compileExpr[Long](b)(rec)
-          case DateType     => compileExpr[java.util.Date](a)(rec) <= compileExpr[java.util.Date](b)(rec)
+          case DateType     => compileExpr[Date](a)(rec) <= compileExpr[Date](b)(rec)
           case StringType   => compileExpr[String](a)(rec) <= compileExpr[String](b)(rec)
         }
         bo.asInstanceOf[Rep[T]]
@@ -111,7 +125,7 @@ def runDelite(d: DataFrame): Any = {
           case DoubleType   => compileExpr[Double](a)(rec) > compileExpr[Double](b)(rec)
           case IntegerType  => compileExpr[Int](a)(rec) > compileExpr[Int](b)(rec)
           case LongType     => compileExpr[Long](a)(rec) > compileExpr[Long](b)(rec)
-          case DateType     => compileExpr[java.util.Date](a)(rec) > compileExpr[java.util.Date](b)(rec)
+          case DateType     => compileExpr[Date](a)(rec) > compileExpr[Date](b)(rec)
           case StringType   => compileExpr[String](a)(rec) > compileExpr[String](b)(rec)
         }
         bo.asInstanceOf[Rep[T]]
@@ -121,7 +135,7 @@ def runDelite(d: DataFrame): Any = {
           case DoubleType   => compileExpr[Double](a)(rec) >= compileExpr[Double](b)(rec)
           case IntegerType  => compileExpr[Int](a)(rec) >= compileExpr[Int](b)(rec)
           case LongType     => compileExpr[Long](a)(rec) >= compileExpr[Long](b)(rec)
-          case DateType     => compileExpr[java.util.Date](a)(rec) >= compileExpr[java.util.Date](b)(rec)
+          case DateType     => compileExpr[Date](a)(rec) >= compileExpr[Date](b)(rec)
           case StringType   => compileExpr[String](a)(rec) >= compileExpr[String](b)(rec)
         }
         bo.asInstanceOf[Rep[T]]
@@ -273,7 +287,7 @@ val tpch6df = (sqlContext.read
   .schema(schema)
   .load(file))
 
-val tpch6res = tpch6df.where(tpch6df("l_shipdate") >= "1994-01-01" && tpch6df("l_shipdate") < "1995-01-01" && tpch6df("l_discount") >= 0.05 && tpch6df("l_discount") <= 0.07 && tpch6df("l_quantity") < 24).agg(sum(tpch6df("l_extendedprice") * tpch6df("l_discount")))
+val tpch6res = tpch6df.where(tpch6df("l_shipdate") >= to_date(lit("1994-01-01")) && tpch6df("l_shipdate") < to_date(lit("1995-01-01")) && tpch6df("l_discount") >= 0.05 && tpch6df("l_discount") <= 0.07 && tpch6df("l_quantity") < 24).agg(sum(tpch6df("l_extendedprice") * tpch6df("l_discount")))
 
 runDelite(tpch6res)
 
