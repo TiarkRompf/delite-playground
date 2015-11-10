@@ -140,6 +140,12 @@ def runDelite(d: DataFrame): Any = {
         }
         bo.asInstanceOf[Rep[T]]
       case Alias(child, name) =>
+        // val res = compileExpr[T](child)(rec).asInstanceOf[Rep[Table[Any]]]
+        // implicit val mf = extractMF(res)
+        // table_select(res, { (rec:Rep[Any]) =>
+        //   record_new(Seq(("test", false, (x:Any) => field[Any](rec, "")(mf, implicitly[SourceContext]))))(
+        //       ManifestFactory.refinedType[Any](manifest[Record], Seq("test").toList, Seq(mf).toList))
+        // }).asInstanceOf[Rep[T]]
         compileExpr[T](child)(rec)
       case Sum(child) =>
         val res = child.dataType match {
