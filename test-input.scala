@@ -80,7 +80,7 @@ def runDelite(d: DataFrame): Any = {
   object DeliteQuery extends OptiQLApplicationCompiler with TPCHQ1Trait with DeliteTestRunner {
 
     def extractMF[T](x: Rep[Table[T]]): Manifest[T] = {
-      println(x.tp.typeArguments)
+     //  println(x.tp.typeArguments)
       x.tp.typeArguments.head.asInstanceOf[Manifest[T]]
     }
 
@@ -153,14 +153,13 @@ def runDelite(d: DataFrame): Any = {
       case Sum(child) =>
         val res = child.dataType match {
           case FloatType  =>
-            table_object_apply(Seq(record_new(Seq(("a", false, (x:Any) => rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Float](child)(l)))))(ManifestFactory.refinedType(manifest[Record], Seq("a").toList, Seq(manifest[Float]).toList))))
+            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Float](child)(l))
           case DoubleType  =>
-            table_object_apply(Seq(record_new(Seq(("a", false, (x:Any) => rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Double](child)(l)))))(ManifestFactory.refinedType(manifest[Record], Seq("a").toList, Seq(manifest[Double]).toList))))
+            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Double](child)(l))
           case IntegerType =>
-            table_object_apply(Seq(record_new(Seq(("a", false, (x:Any) => rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Int](child)(l)))))(ManifestFactory.refinedType(manifest[Record], Seq("a").toList, Seq(manifest[Int]).toList))))
+            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Int](child)(l))
           case LongType =>
-            // table_object_apply(Seq(rec.asInstanceOf[Rep[Table[Long]]].Sum(l => compileExpr[Long](child)(l))))
-            table_object_apply(Seq(record_new(Seq(("a", false, (x:Any) => rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Long](child)(l)))))(ManifestFactory.refinedType(manifest[Record], Seq("a").toList, Seq(manifest[Long]).toList))))
+            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Long](child)(l))
         }
         res.asInstanceOf[Rep[T]]
       case Cast(child, dataType) =>
@@ -210,32 +209,26 @@ def runDelite(d: DataFrame): Any = {
 
     def getName(p: Expression): String = p match {
       case AttributeReference(name, _, _, _) => name
-      case Alias(child, _) => getName(child)
+      case Alias(_, name) => name
       case _ => p.getClass().getName()
-    }
-
-
-    def table_concat(t1: Rep[Table[Record]], t2: Rep[Table[Record]]) = {
-
-      val mf1 = extractMF[Record](t1)
-      val mf2 = extractMF[Record](t2)
-
-      println(mf1.getClass())
-      println(mf2.getClass())
-      // println(mf1.asInstanceOf[RefinedManifest[A]].fields.map {case ((p:String), (q:Manifest[_])) => p})
-
-      t1
     }
 
 
     def compile(d: LogicalPlan): Rep[Table[Record]] = d match {
       case Aggregate(groupingExpr, aggregateExpr, child) =>
         println(groupingExpr.map(p => getName(p)))
-        println(aggregateExpr.map(p => getName(p)))
+        // println(aggregateExpr.map(p => getName(p)))
         val res = compile(child)
-        aggregateExpr.foldLeft(Table[Record](table_size(res))) {case ((agg:Rep[Table[Record]]), (p:Expression)) =>
-          table_concat(agg, compileExpr[Table[Record]](p)(res))
-        }
+        implicit val mf = ManifestFactory.refinedType[Record](
+                manifest[Record],
+                aggregateExpr.map {p => getName(p)}.toList,
+                aggregateExpr.map { (p:NamedExpression) =>
+                    convertType(p.dataType)}.toList )
+        table_object_apply(Seq(
+          record_new[Record](aggregateExpr.map { (p:NamedExpression) =>
+            val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
+            (getName(p), false, (x:Any) => compileExpr[Any](p)(res)(mfp))
+          })))
       case Project(projectList, child) =>
         // println(projectList)
         val res = compile(child)
@@ -328,7 +321,7 @@ val tpch1df = (sqlContext.read
   .schema(schema)
   .load(file))
 
-val tpch1res = tpch1df.where(tpch1df("l_shipdate") <= to_date(lit("1998-12-01"))).agg(sum("l_quantity"), sum("l_extendedprice"))
+val tpch1res = tpch1df.where(tpch1df("l_shipdate") <= to_date(lit("1998-12-01"))).agg(sum("l_quantity") as "l_quantity_sum", sum("l_extendedprice") as "l_extendedprice_sum")
 
 runDelite(tpch1res)
 tpch1res.show()
