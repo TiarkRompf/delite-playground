@@ -225,13 +225,17 @@ def runDelite(d: DataFrame): Any = {
         val res = compile(child)
         println("Aggregate S")
 
-        //val mfa = extractMF(res)
+        val mfa = extractMF(res)
         val mfk = convertType(groupingExpr.head.dataType).asInstanceOf[Manifest[Any]]
+
+        val pos = implicitly[SourceContext]
+
         val group = table_groupby(
           res,
           {(rec:Rep[Record]) => compileExpr[Any](groupingExpr.head)(rec)}
-        ) // (mfa, mfk, implicitly[SourceContext])
+        )(mfa, mfk, pos)
 
+        // Table[(Key, Table[Record])]
 
         //val mf = ManifestFactory.refinedType[Record](
         //        manifest[Record],
@@ -248,7 +252,12 @@ def runDelite(d: DataFrame): Any = {
         //    }
         //  )(mf)
         //))(mf, implicitly[SourceContext], null)
-        table_first(group)._2
+
+  
+        val mkt = m_Tup2(mfk,res.tp)
+
+        tup2__2(table_first(group)(mkt,pos))(res.tp,pos)
+
       case Project(projectList, child) =>
         println("Project")
         val res = compile(child)
