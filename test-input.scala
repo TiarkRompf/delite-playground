@@ -226,37 +226,70 @@ def runDelite(d: DataFrame): Any = {
         println("Aggregate S")
 
         val mfa = extractMF(res)
-        val mfk = convertType(groupingExpr.head.dataType).asInstanceOf[Manifest[Any]]
+        val mfk = ManifestFactory.refinedType[Record](
+                manifest[Record],
+                groupingExpr.map {p => getName(p)}.toList,
+                groupingExpr.map { (p:Expression) =>
+                    convertType(p.dataType).asInstanceOf[Manifest[_]]}.toList).asInstanceOf[Manifest[Any]]
 
+        System.out.println(mfa)
+        System.out.println(mfk)
         val pos = implicitly[SourceContext]
 
         val group = table_groupby(
           res,
-          {(rec:Rep[Record]) => compileExpr[Any](groupingExpr.head)(rec)}
+          {(rec:Rep[Record]) =>
+          record_new(
+            groupingExpr.map {
+              (p:Expression) =>
+                val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
+                System.out.println(">> " + mfp)
+                (getName(p), false, {(x:Any) =>
+                  compileExpr[Any](p)(rec)(mfp)
+                  }
+                )
+            }
+          )(mfk)
+          }
         )(mfa, mfk, pos)
 
         // Table[(Key, Table[Record])]
+        // val mkt = m_Tup2(mfk,res.tp)
+        // tup2__2(table_first(group)(mkt,pos))(res.tp,pos)
+        System.out.println("Aggregate")
 
-        //val mf = ManifestFactory.refinedType[Record](
-        //        manifest[Record],
-        //        aggregateExpr.map {p => getName(p)}.toList,
-        //        aggregateExpr.map { (p:NamedExpression) =>
-        //            convertType(p.dataType)}.toList )
-        //table_object_apply[Record](Seq(
-        //  record_new[Record](aggregateExpr.map {
-        //    (p:NamedExpression) =>
-        //      val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
-        //      (getName(p), false, {(x:Any) =>
-        //        compileExpr[Any](p)(table_first(group)._2)(mfp)
-        //        })
-        //    }
-        //  )(mf)
-        //))(mf, implicitly[SourceContext], null)
-
-  
-        val mkt = m_Tup2(mfk,res.tp)
-
-        tup2__2(table_first(group)(mkt,pos))(res.tp,pos)
+        val mfo = ManifestFactory.refinedType[Record](
+                manifest[Record],
+                aggregateExpr.map {p => getName(p)}.toList,
+                aggregateExpr.map { (p:Expression) =>
+                    convertType(p.dataType)}.toList )
+        val mfg = extractMF(group)
+        val arr = array_map(
+            table_toarray(group)(mfg, pos),
+            { (coup:Rep[Tup2[Any, Table[Record]]]) =>
+              val mkt = m_Tup2(mfk,res.tp)
+              val v1 = tup2__1(coup)(mfk, pos)
+              val v2 = tup2__2(coup)(res.tp.asInstanceOf[Manifest[Table[Record]]],pos)
+              record_new[Record](aggregateExpr.map {
+                (p:NamedExpression) =>
+                val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
+                p match {
+                  case AttributeReference(_, _, _, _) =>
+                    (getName(p), false, {(x:Any) => compileExpr[Any](p)(v1)(mfp)})
+                  case _ =>
+                    (getName(p), false, {(x:Any) => compileExpr[Any](p)(v2)(mfp)})
+                }
+              })(mfo)
+            }
+           )(mfg, mfo, pos)
+        val tmp = table_object_apply(arr) //(mfo, pos, new Overload2)
+        // System.out.println(tmp.tp)
+        // // Table[(Key, Table[Record])]
+        // val mkt = m_Tup2(mfk,res.tp)
+        // val tt = tup2__2(table_first(group)(mkt,pos))(res.tp,pos)
+        // System.out.println(tt.tp)
+        // tt
+        tmp
 
       case Project(projectList, child) =>
         println("Project")
@@ -362,7 +395,7 @@ val tpch1df = (sqlContext.read
   .schema(schema)
   .load(file))
 
-val tpch1res = tpch1df.where(tpch1df("l_shipdate") <= to_date(lit("1998-12-01"))).groupBy("l_linestatus").agg(sum("l_quantity") as "l_quantity_sum") // , sum("l_extendedprice") as "l_extendedprice_sum")
+val tpch1res = tpch1df.where(tpch1df("l_shipdate") <= to_date(lit("1998-12-01"))).groupBy("l_returnflag", "l_linestatus").agg(sum("l_quantity") as "l_quantity_sum") // , sum("l_extendedprice") as "l_extendedprice_sum")
 
 
 // TPCH - 6
