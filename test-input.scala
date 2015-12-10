@@ -368,7 +368,7 @@ def deliteSQL(s: String) = runDelite(sqlContext.sql(s))
 //}) OrderBy(asc(_.returnFlag), asc(_.lineStatus))
 
 // TPCH - 1
-
+def tpch1() = {
 val tpch1df = (sqlContext.read
   .format("com.databricks.spark.csv")
   .option("delimiter", "|")
@@ -377,9 +377,16 @@ val tpch1df = (sqlContext.read
   .schema(schema)
   .load(file))
 
-val tpch1res = tpch1df.where(tpch1df("l_shipdate") <= to_date(lit("1998-12-01"))).groupBy("l_returnflag", "l_linestatus").agg(sum("l_quantity") as "l_quantity_sum") // , sum("l_extendedprice") as "l_extendedprice_sum")
+val tpch1res = tpch1df.where(tpch1df("l_shipdate") <= to_date(lit("1998-12-01"))).groupBy("l_returnflag", "l_linestatus").agg(sum("l_quantity") as "l_quantity_sum", sum("l_extendedprice") as "l_extendedprice_sum")
 
+  runDelite(tpch1res)
 
+  val start = System.currentTimeMillis();
+  tpch1res.show()
+  val stop = System.currentTimeMillis();
+
+  println(">> " + (stop - start))
+}
 // TPCH - 6
 def tpch6() = {
   val tpch6df = (sqlContext.read
@@ -398,6 +405,6 @@ def tpch6() = {
   tpch6res.show()
   val stop = System.currentTimeMillis();
 
-  println(stop - start)
+  println(">> " + (stop - start))
 }
 
