@@ -95,10 +95,9 @@ def runDelite(d: DataFrame): Any = {
 
     def compileExpr[T:Manifest](d: Expression)(rec: Rep[_]): Rep[T] = d match {
       case AttributeReference(name, _, _, _) =>
-        println("Attr: " + name)
         field[T](rec, name)
       case Literal(value, DateType) =>
-            conv_date(value.asInstanceOf[Int]).asInstanceOf[Rep[T]]
+        conv_date(value.asInstanceOf[Int]).asInstanceOf[Rep[T]]
       case Literal(value, _) =>
         unit[T](value.asInstanceOf[T])
       case And(left, right) =>
@@ -144,16 +143,8 @@ def runDelite(d: DataFrame): Any = {
         }
         bo.asInstanceOf[Rep[T]]
       case Alias(child, name) =>
-        println("Alias")
-        // val res = compileExpr[T](child)(rec).asInstanceOf[Rep[Table[Any]]]
-        // implicit val mf = extractMF(res)
-        // table_select(res, { (rec:Rep[Any]) =>
-        //   record_new(Seq((name, false, (x:Any) => field[Any](rec, "")(mf, implicitly[SourceContext]))))(
-        //       ManifestFactory.refinedType[Any](manifest[Record], Seq("test").toList, Seq(mf).toList))
-        // }).asInstanceOf[Rep[T]]
         compileExpr[T](child)(rec)
       case Sum(child) =>
-        println("Sum, " + child.toString)
         val res = child.dataType match {
           case FloatType  =>
             rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Float](child)(l))
@@ -219,82 +210,75 @@ def runDelite(d: DataFrame): Any = {
 
     def compile(d: LogicalPlan): Rep[Table[Record]] = d match {
       case Aggregate(groupingExpr, aggregateExpr, child) =>
-        println("Aggregate")
-        println(aggregateExpr.map(p => getName(p)))
-        println(groupingExpr.map(p => getName(p)))
         val res = compile(child)
-        println("Aggregate S")
-
         val mfa = extractMF(res)
-        val mfk = ManifestFactory.refinedType[Record](
-                manifest[Record],
-                groupingExpr.map {p => getName(p)}.toList,
-                groupingExpr.map { (p:Expression) =>
-                    convertType(p.dataType).asInstanceOf[Manifest[_]]}.toList).asInstanceOf[Manifest[Any]]
-
-        System.out.println(mfa)
-        System.out.println(mfk)
         val pos = implicitly[SourceContext]
-
-        val group = table_groupby(
-          res,
-          {(rec:Rep[Record]) =>
-          record_new(
-            groupingExpr.map {
-              (p:Expression) =>
-                val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
-                System.out.println(">> " + mfp)
-                (getName(p), false, {(x:Any) =>
-                  compileExpr[Any](p)(rec)(mfp)
-                  }
-                )
-            }
-          )(mfk)
-          }
-        )(mfa, mfk, pos)
-
-        // Table[(Key, Table[Record])]
-        // val mkt = m_Tup2(mfk,res.tp)
-        // tup2__2(table_first(group)(mkt,pos))(res.tp,pos)
-        System.out.println("Aggregate")
-
         val mfo = ManifestFactory.refinedType[Record](
                 manifest[Record],
                 aggregateExpr.map {p => getName(p)}.toList,
                 aggregateExpr.map { (p:Expression) =>
                     convertType(p.dataType)}.toList )
-        val mfg = extractMF(group)
-        val arr = array_map(
-            table_toarray(group)(mfg, pos),
-            { (coup:Rep[Tup2[Any, Table[Record]]]) =>
-              val mkt = m_Tup2(mfk,res.tp)
-              val v1 = tup2__1(coup)(mfk, pos)
-              val v2 = tup2__2(coup)(res.tp.asInstanceOf[Manifest[Table[Record]]],pos)
-              record_new[Record](aggregateExpr.map {
-                (p:NamedExpression) =>
-                val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
-                p match {
-                  case AttributeReference(_, _, _, _) =>
-                    (getName(p), false, {(x:Any) => compileExpr[Any](p)(v1)(mfp)})
-                  case _ =>
-                    (getName(p), false, {(x:Any) => compileExpr[Any](p)(v2)(mfp)})
+
+        if (groupingExpr.length == 0) {
+          table_object_apply(
+            Seq(
+              record_new[Record](
+                aggregateExpr.map { (p:Expression) =>
+                  val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
+                  (getName(p), false, (x:Any) => compileExpr[Any](p)(res)(mfp))
                 }
-              })(mfo)
+              )(mfo)
+            )
+          )(mfo, pos, null)
+        } else {
+
+          val mfk = ManifestFactory.refinedType[Record](
+                  manifest[Record],
+                  groupingExpr.map {p => getName(p)}.toList,
+                  groupingExpr.map { (p:Expression) =>
+                      convertType(p.dataType).asInstanceOf[Manifest[_]]}.toList).asInstanceOf[Manifest[Any]]
+
+
+          val group = table_groupby(
+            res,
+            {(rec:Rep[Record]) =>
+            record_new(
+              groupingExpr.map {
+                (p:Expression) =>
+                  val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
+                  (getName(p), false, {(x:Any) =>
+                    compileExpr[Any](p)(rec)(mfp)
+                    }
+                  )
+              }
+            )(mfk)
             }
-           )(mfg, mfo, pos)
-        val tmp = table_object_apply(arr) //(mfo, pos, new Overload2)
-        // System.out.println(tmp.tp)
-        // // Table[(Key, Table[Record])]
-        // val mkt = m_Tup2(mfk,res.tp)
-        // val tt = tup2__2(table_first(group)(mkt,pos))(res.tp,pos)
-        // System.out.println(tt.tp)
-        // tt
-        tmp
+          )(mfa, mfk, pos)
+
+          val mfg = extractMF(group)
+          val arr = table_select(
+              group,
+              { (coup:Rep[Tup2[Any, Table[Record]]]) =>
+                val mkt = m_Tup2(mfk,res.tp)
+                val key = tup2__1(coup)(mfk, pos)
+                val tab = tup2__2(coup)(res.tp.asInstanceOf[Manifest[Table[Record]]],pos)
+                record_new[Record](aggregateExpr.map {
+                  (p:NamedExpression) =>
+                  val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
+                  p match {
+                    case AttributeReference(_, _, _, _) =>
+                      (getName(p), false, {(x:Any) => compileExpr[Any](p)(key)(mfp)})
+                    case _ =>
+                      (getName(p), false, {(x:Any) => compileExpr[Any](p)(tab)(mfp)})
+                  }
+                })(mfo)
+              }
+             )(mfg, mfo, pos)
+          arr
+        }
 
       case Project(projectList, child) =>
-        println("Project")
         val res = compile(child)
-        println("Project S")
         val mfb = extractMF(res)
         val mfa = ManifestFactory.refinedType[Record](
                 manifest[Record],
@@ -312,9 +296,7 @@ def runDelite(d: DataFrame): Any = {
           }
         )(mfb, mfa, implicitly[SourceContext])
       case Filter(condition, child) =>
-        println("Filter")
         val res = compile(child)
-        println("Filter S")
         val mf = extractMF(res)
         table_where(res, { (rec:Rep[Record]) =>
           compileExpr[Boolean](condition)(rec)
