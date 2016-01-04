@@ -106,26 +106,40 @@ import optiql.library._
 import optiql.shared._
 import scala.reflect.{Manifest,SourceContext,ManifestFactory,RefinedManifest}
 import scala.virtualization.lms.common.Record
+import scala.math.Ordering
 import playground._
 // import org.joda.time.DateTime
-import java.util._
+import java.util.{Date, Calendar}
 import java.text._
 
+def convertDataType(e: DataType) : Manifest[_] = e match {
+    case ByteType => manifest[Char]
+    case BooleanType => manifest[Boolean]
+    case IntegerType => manifest[Int]
+    case LongType => manifest[Long]
+    case DoubleType => manifest[Double]
+    case DateType => manifest[java.util.Date]
+    case StringType => manifest[String]
+    case StructType(fields) =>
+      val names = fields map {
+        case StructField(name,tpe,nullable,metadata) => name
+      }
+      val elems = fields map {
+        case StructField(name,tpe,nullable,metadata) => convertDataType(tpe)
+      }
+      ManifestFactory.refinedType[Record](manifest[Record], names.toList, elems.toList)
+    case _ => throw new RuntimeException("convertDataType, TODO: " + e.toString)
+}
 
-def convertType(e: DataType): Manifest[_] = e match {
-  case ByteType => manifest[Char]
-  case IntegerType => manifest[Int]
-  case DoubleType => manifest[Double]
-  case DateType => manifest[java.util.Date]
-  case StringType => manifest[String]
-  case StructType(fields) =>
-    val names = fields map {
-      case StructField(name,tpe,nullable,metadata) => name
-    }
-    val elems = fields map {
-      case StructField(name,tpe,nullable,metadata) => convertType(tpe)
-    }
-    ManifestFactory.refinedType[Record](manifest[Record], names.toList, elems.toList)
+def convertType(e: Expression): Manifest[_] = e match {
+  case Count(_) => manifest[Int]
+  case Alias(Count(_), _) => manifest[Int]
+  case _ => convertDataType(e.dataType)
+}
+
+def getType(e: Option[Expression]) : Manifest[_] = e match {
+  case Some(EqualTo(left, right)) => convertType(left)
+  case _ => manifest[Any]
 }
 
 def escapeDelim(c: Char) = if (c == '|') "\\|" else c.toString
@@ -134,6 +148,57 @@ def escapeDelim(c: Char) = if (c == '|') "\\|" else c.toString
 def runDelite(d: DataFrame): Any = {
 
   object DeliteQuery extends OptiQLApplicationCompiler with TPCHQ1Trait with DeliteTestRunner {
+    def compareFloat(d: SortDirection, x: Rep[Float], y: Rep[Float]) : Rep[Int] = {
+      if (x < y)
+        return if (d == Ascending) unit(-1) else unit(1)
+      if (x > y)
+        return if (d == Ascending) unit(1) else unit(-1)
+
+      unit(0)
+    }
+
+    def compareDouble(d: SortDirection, x: Rep[Double], y: Rep[Double]) : Rep[Int] = {
+      if (x < y)
+        return if (d == Ascending) unit(-1) else unit(1)
+      if (x > y)
+        return if (d == Ascending) unit(1) else unit(-1)
+
+      unit(0)
+    }
+
+    def compareInt(d: SortDirection, x: Rep[Int], y: Rep[Int]) : Rep[Int] = {
+      if (x < y)
+        return if (d == Ascending) unit(-1) else unit(1)
+      if (x > y)
+        return if (d == Ascending) unit(1) else unit(-1)
+
+      unit(0)
+    }
+
+    def compareLong(d: SortDirection, x: Rep[Long], y: Rep[Long]) : Rep[Int] = {
+      if (x < y)
+        return if (d == Ascending) unit(-1) else unit(1)
+      if (x > y)
+        return if (d == Ascending) unit(1) else unit(-1)
+
+      unit(0)
+    }
+    def compareString(d: SortDirection, x: Rep[String], y: Rep[String]) : Rep[Int] = {
+      if (x < y)
+        return if (d == Ascending) unit(-1) else unit(1)
+      if (x > y)
+        return if (d == Ascending) unit(1) else unit(-1)
+
+      unit(0)
+    }
+    def compareDate(d: SortDirection, x: Rep[Date], y: Rep[Date]) : Rep[Int] = {
+      if (x < y)
+        return if (d == Ascending) unit(-1) else unit(1)
+      if (x > y)
+        return if (d == Ascending) unit(1) else unit(-1)
+
+      unit(0)
+    }
 
     def extractMF[T](x: Rep[Table[T]]): Manifest[T] = {
      //  println(x.tp.typeArguments)
@@ -147,6 +212,16 @@ def runDelite(d: DataFrame): Any = {
       c.setTime(new java.util.Date(0)); // set origin 1970-01-01.
       c.add(Calendar.DAY_OF_YEAR, days + 1); // Adding the number of days
       Date(primitive_forge_int_plus(primitive_forge_int_shift_left(c.get(Calendar.YEAR), unit(9)), primitive_forge_int_plus(primitive_forge_int_shift_left(c.get(Calendar.MONTH) + 1, unit(5)), c.get(Calendar.DATE))))
+    }
+
+    def appendMan(v1 : RefinedManifest[Record], v2 : RefinedManifest[Record]) = {
+      val name = v1.fields.map { _._1 } ++ v2.fields.map { _._1 }
+      val tpe  = v1.fields.map { _._2 } ++ v2.fields.map { _._2 }
+
+      ManifestFactory.refinedType[Record](
+                manifest[Record],
+                name,
+                tpe)
     }
 
     def compileExpr[T:Manifest](d: Expression)(rec: Rep[_]): Rep[T] = d match {
@@ -212,8 +287,24 @@ def runDelite(d: DataFrame): Any = {
             rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Long](child)(l))
         }
         res.asInstanceOf[Rep[T]]
+      case Average(child) =>
+        val res = child.dataType match {
+          case FloatType  =>
+            rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Float](child)(l))
+          case DoubleType  =>
+            rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Double](child)(l))
+          //case IntegerType =>
+          //  rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Fractional[Int]](child)(l))
+          //case LongType =>
+          //  rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Fractional[Long]](child)(l))
+          case _ => throw new RuntimeException("Average, " + child.dataType)
+        }
+        res.asInstanceOf[Rep[T]]
       case Cast(child, dataType) =>
         compileExpr[T](child)(rec)
+      case Count(child) =>
+        val res = rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Int](child)(l))
+        res.asInstanceOf[Rep[T]]
       case Add(left, right) =>
         val res = left.dataType match {
           case FloatType  =>
@@ -250,37 +341,121 @@ def runDelite(d: DataFrame): Any = {
             compileExpr[Long](left)(rec) * compileExpr[Long](right)(rec)
         }
         res.asInstanceOf[Rep[T]]
+      case Divide(left, right) =>
+        val res = left.dataType match {
+          case FloatType  =>
+            compileExpr[Float](left)(rec) / compileExpr[Float](right)(rec)
+          case DoubleType  =>
+            compileExpr[Double](left)(rec) / compileExpr[Double](right)(rec)
+          case IntegerType =>
+            compileExpr[Int](left)(rec) / compileExpr[Int](right)(rec)
+          case LongType =>
+            compileExpr[Long](left)(rec) / compileExpr[Long](right)(rec)
+        }
+        res.asInstanceOf[Rep[T]]
+      case CaseWhen(branches) =>
+        val res = d.dataType match {
+          case FloatType  =>
+            unit[Float](1.0f)
+          case DoubleType  =>
+            unit[Double](1.0)
+          case IntegerType =>
+            unit[Int](1)
+          case LongType =>
+            unit[Long](1L)
+        }
+        res.asInstanceOf[Rep[T]]
+        // def aux_t (list:Seq[Expression]): Rep[List[(Expression, Expression)]] = list match {
+        //   case cond::value::q => (cond, value)::aux_t(q)
+        //   case default::Nil => (unit(true), compileExpr[Any](default)(rec))::unit(List())
+        //   case Nil => unit(List())
+        // }
+        // val list = aux_t(branches).map {
+        //   case (cond, value) => (compileExpr[Boolean](cond)(rec), compileExpr[Any](value)(rec))
+        // }
+        // System.out.println(branches)
+        // val (_, res) = aux_t(branches).find {
+        //   case ((found, res), (cond, value)) => if (found) (unit(true), res) else if (cond) (unit(true), value) else (unit(false), unit(null))
+        // }
+        //val res = list.find {
+        //  case (cond, value) => cond
+        //} match {
+        //  case Some((cond, value)) => value
+        //  case _ => throw new RuntimeException("Invalid casewhen syntax")
+        //}
+        //res.asInstanceOf[Rep[T]]
+      case StartsWith(string, pref) =>
+        val res = compileExpr[String](pref)(rec).startsWith(compileExpr[String](string)(rec))
+        res.asInstanceOf[Rep[T]]
 
-      case _ =>
-        println("TODO: " + getName(d))
-        println("TODO: " + d.dataType)
-        rec.asInstanceOf[Rep[T]]
+      case _ => throw new RuntimeException("compileExprn, TODO: " + getName(d) + ": " + d.dataType)
     }
 
     def getName(p: Expression): String = p match {
       case AttributeReference(name, _, _, _) => name
       case Alias(_, name) => name
-      case _ => "TODO " + p.getClass().getName()
+      case _ => throw new RuntimeException("getName, TODO: " + p.getClass.getName)
     }
 
-
     def compile(d: LogicalPlan): Rep[Table[Record]] = d match {
+      case Sort(sortingExpr, global, child) =>
+        val res = compile(child)
+        val mfa = extractMF(res)
+        table_orderby(
+          res,
+          sortingExpr.map {
+            (p:Expression) => p match {
+              case SortOrder(child, order) =>
+                child.dataType match {
+                  case FloatType =>
+                    (x:Rep[Record], y:Rep[Record]) => {
+                      compareFloat(order, compileExpr[Float](child)(x), compileExpr[Float](child)(y))
+                    }
+                  case DoubleType =>
+                    (x:Rep[Record], y:Rep[Record]) => {
+                      compareDouble(order, compileExpr[Double](child)(x), compileExpr[Double](child)(y))
+                    }
+                  case IntegerType =>
+                    (x:Rep[Record], y:Rep[Record]) => {
+                      compareInt(order, compileExpr[Int](child)(x), compileExpr[Int](child)(y))
+                    }
+                  case LongType =>
+                    (x:Rep[Record], y:Rep[Record]) => {
+                      compareLong(order, compileExpr[Long](child)(x), compileExpr[Long](child)(y))
+                    }
+                  case DateType =>
+                    (x:Rep[Record], y:Rep[Record]) => {
+                      compareDate(order, compileExpr[Date](child)(x), compileExpr[Date](child)(y))
+                    }
+                  case StringType =>
+                    (x:Rep[Record], y:Rep[Record]) => {
+                      compareString(order, compileExpr[String](child)(x), compileExpr[String](child)(y))
+                    }
+                }
+              case _ => throw new RuntimeException("Sorting Expression")
+            }
+          }
+        )(mfa, implicitly[SourceContext])
       case Aggregate(groupingExpr, aggregateExpr, child) =>
         val res = compile(child)
+
+        if (aggregateExpr.length == 0)
+          return res
+
         val mfa = extractMF(res)
         val pos = implicitly[SourceContext]
         val mfo = ManifestFactory.refinedType[Record](
                 manifest[Record],
                 aggregateExpr.map {p => getName(p)}.toList,
                 aggregateExpr.map { (p:Expression) =>
-                    convertType(p.dataType)}.toList )
+                    convertType(p)}.toList )
 
         if (groupingExpr.length == 0) {
           table_object_apply(
             Seq(
               record_new[Record](
                 aggregateExpr.map { (p:Expression) =>
-                  val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
+                  val mfp = convertType(p).asInstanceOf[Manifest[Any]]
                   (getName(p), false, (x:Any) => compileExpr[Any](p)(res)(mfp))
                 }
               )(mfo)
@@ -292,8 +467,7 @@ def runDelite(d: DataFrame): Any = {
                   manifest[Record],
                   groupingExpr.map {p => getName(p)}.toList,
                   groupingExpr.map { (p:Expression) =>
-                      convertType(p.dataType).asInstanceOf[Manifest[_]]}.toList).asInstanceOf[Manifest[Any]]
-
+                      convertType(p).asInstanceOf[Manifest[_]]}.toList).asInstanceOf[Manifest[Any]]
 
           val group = table_groupby(
             res,
@@ -301,26 +475,23 @@ def runDelite(d: DataFrame): Any = {
             record_new(
               groupingExpr.map {
                 (p:Expression) =>
-                  val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
-                  (getName(p), false, {(x:Any) =>
-                    compileExpr[Any](p)(rec)(mfp)
-                    }
-                  )
+                  val mfp = convertType(p).asInstanceOf[Manifest[Any]]
+                  (getName(p), false, {(x:Any) => compileExpr[Any](p)(rec)(mfp)})
               }
             )(mfk)
             }
           )(mfa, mfk, pos)
 
           val mfg = extractMF(group)
+          val mkt = m_Tup2(mfk,res.tp)
           val arr = table_select(
               group,
               { (coup:Rep[Tup2[Any, Table[Record]]]) =>
-                val mkt = m_Tup2(mfk,res.tp)
                 val key = tup2__1(coup)(mfk, pos)
                 val tab = tup2__2(coup)(res.tp.asInstanceOf[Manifest[Table[Record]]],pos)
                 record_new[Record](aggregateExpr.map {
                   (p:NamedExpression) =>
-                  val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
+                  val mfp = convertType(p).asInstanceOf[Manifest[Any]]
                   p match {
                     case AttributeReference(_, _, _, _) =>
                       (getName(p), false, {(x:Any) => compileExpr[Any](p)(key)(mfp)})
@@ -335,17 +506,22 @@ def runDelite(d: DataFrame): Any = {
 
       case Project(projectList, child) =>
         val res = compile(child)
+
+        if (projectList.length == 0)
+          return res
+
+
         val mfb = extractMF(res)
         val mfa = ManifestFactory.refinedType[Record](
                 manifest[Record],
                 projectList.map {p => getName(p)}.toList,
                 projectList.map { (p:NamedExpression) =>
-                    convertType(p.dataType)}.toList )
+                    convertType(p)}.toList )
         table_select(
           res,
           { (rec:Rep[Record]) =>
             record_new[Record](projectList.map {
-              (p:NamedExpression) => val mfp = convertType(p.dataType).asInstanceOf[Manifest[Any]]
+              (p:NamedExpression) => val mfp = convertType(p).asInstanceOf[Manifest[Any]]
                 (getName(p), false, (x:Any) => compileExpr[Any](p)(rec)(mfp))
               }
             )(mfa)
@@ -376,16 +552,42 @@ def runDelite(d: DataFrame): Any = {
             println(relation.delimiter)
              */
             trait TYPE
-            implicit val mf: Manifest[TYPE] = convertType(relation.schema).asInstanceOf[Manifest[TYPE]]
+            implicit val mf: Manifest[TYPE] = convertDataType(relation.schema).asInstanceOf[Manifest[TYPE]]
 
             Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]]
 
-            //case _ =>
-            //println("unknown base relation: " + relation + "/" + relation.getClass)
         }
-        case _ =>
-           println("unknown query operator: " + d.getClass)
-           d.asInstanceOf[Rep[Table[Record]]]
+      case Join(left, right, tpe, cond) =>
+        val resl = compile(left)
+        val resr = compile(right)
+
+        val mfl = extractMF(resl)
+        val mfr = extractMF(resr)
+        val mfk = getType(cond).asInstanceOf[Manifest[Any]]
+        val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
+
+        cond match {
+          case Some(EqualTo(le, re)) =>
+            val lkey = (p: Rep[Record]) => { compileExpr[Any](le)(p)(mfk) }
+            val rkey = (p: Rep[Record]) => { compileExpr[Any](re)(p)(mfk) }
+            val reskey = (l: Rep[Record], r: Rep[Record]) => {
+              record_new[Record](
+                mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
+                  case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
+                }
+                ++
+                mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
+                  case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
+                }
+              )(mfo)
+            }
+            tpe match {
+              case Inner => table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
+              case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
+            }
+          case _ => throw new RuntimeException("Non binary expression not supported is not supported")
+        }
+      case _ => throw new RuntimeException("unknown query operator: " + d.getClass)
     }
 
     override def main() {
@@ -408,32 +610,41 @@ def runDelite(d: DataFrame): Any = {
 
 def deliteSQL(s: String) = runDelite(sqlContext.sql(s))
 
-// deliteSQL("select l_quantity from lineitem where l_quantity > 45")
-
-//val q = lineItems Where(_.l_shipdate <= Date("1998-12-01")) GroupBy(l => pack(l.l_returnflag,l.l_linestatus)) Select(g => new Record {
-//  val returnFlag = g.key._1
-//  val lineStatus = g.key._2
-//  val sumQty = g.values.Sum(_.l_quantity)
-//  val sumBasePrice = g.values.Sum(_.l_extendedprice)
-//  val sumDiscountedPrice = g.values.Sum(l => l.l_extendedprice * (1.0 - l.l_discount))
-//  val sumCharge = g.values.Sum(l => l.l_extendedprice * (1.0 - l.l_discount) * infix_+(1.0, l.l_tax)) //FIXME: infix_+ fails to resolve automatically
-//  val avgQty = g.values.Average(_.l_quantity)
-//  val avgPrice = g.values.Average(_.l_extendedprice)
-//  val avgDiscount = g.values.Average(_.l_discount)
-//  val countOrder = g.values.Count
-//}) OrderBy(asc(_.returnFlag), asc(_.lineStatus))
-
 // TPCH - 1
 def tpch1() = {
-val tpch1df = (sqlContext.read
-  .format("com.databricks.spark.csv")
-  .option("delimiter", "|")
-  .option("header", "false") // use first line of all files as header
-  .option("inferschema", "false") // automatically infer data types
-  .schema(schema)
-  .load(file))
+  val lineitem = (sqlContext.read
+    .format("com.databricks.spark.csv")
+    .option("delimiter", "|")
+    .option("header", "false") // use first line of all files as header
+    .option("inferschema", "false") // automatically infer data types
+    .schema(schema_lineitem)
+    .load(file_lineitem))
 
-val tpch1res = tpch1df.where(tpch1df("l_shipdate") <= to_date(lit("1998-12-01"))).groupBy("l_returnflag", "l_linestatus").agg(sum("l_quantity") as "l_quantity_sum", sum("l_extendedprice") as "l_extendedprice_sum")
+  lineitem.registerTempTable("lineitem")
+//  val tpch1res = lineitem.where(lineitem("l_shipdate") <= to_date(lit("1998-12-01"))).groupBy("l_returnflag", "l_linestatus").agg(sum("l_quantity") as "sum_qty", sum("l_extendedprice") as "sum_base_price", sum(lineitem("l_extendedprice") * (lit(1) - lineitem("l_discount"))) as "sum_disc_price", sum(lineitem("l_extendedprice") * (lit(1) - lineitem("l_discount")) * (lit(1) + lineitem("l_tax"))) as "sum_charge", avg("l_quantity") as "avg_qty", avg("l_extendedprice") as "avg_price", avg("l_discount") as "avg_disc", count("*") as "count_order")
+
+  val tpch1res = sqlContext.sql(
+    "select " +
+      "l_returnflag, " +
+      "l_linestatus, " +
+      "sum(l_quantity) as sum_qty, " +
+      "sum(l_extendedprice) as sum_base_price, " +
+      "sum(l_extendedprice * (1 - l_discount)) as sum_disc_price, " +
+      "sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge, " +
+      "avg(l_quantity) as avg_qty, " +
+      "avg(l_extendedprice) as avg_price, " +
+      "avg(l_discount) as avg_disc, " +
+      "count(*) as count_order " +
+    "from " +
+      "lineitem " +
+    "where " +
+      "l_shipdate <= to_date('1998-09-02') " +
+    "group by " +
+      "l_returnflag, " +
+      "l_linestatus " +
+    "order by " +
+      "l_returnflag, " +
+      "l_linestatus")
 
   runDelite(tpch1res)
 
@@ -442,18 +653,42 @@ val tpch1res = tpch1df.where(tpch1df("l_shipdate") <= to_date(lit("1998-12-01"))
   val stop = System.currentTimeMillis();
 
   println(">> " + (stop - start))
+
 }
+
+// TPCH - 4
+def tpch4() = {
+  //val orders = (sqlContext.read
+  //  .format("com.databricks.spark.csv")
+  //  .option("delimiter", "|")
+  //  .option("header", "false") // use first line of all files as header
+  //  .option("inferschema", "false") // automatically infer data types
+  //  .schema(schema_orders)
+  //  .load(file_orders))
+
+  //val lineitem = (sqlContext.read
+  //  .format("com.databricks.spark.csv")
+  //  .option("delimiter", "|")
+  //  .option("header", "false") // use first line of all files as header
+  //  .option("inferschema", "false") // automatically infer data types
+  //  .schema(schema_lineitem)
+  //  .load(file_lineitem))
+
+
+  //val tpch4res =
+}
+
 // TPCH - 6
 def tpch6() = {
-  val tpch6df = (sqlContext.read
+  val lineitem = (sqlContext.read
     .format("com.databricks.spark.csv")
     .option("delimiter", "|")
     .option("header", "false") // use first line of all files as header
     .option("inferschema", "false") // automatically infer data types
-    .schema(schema)
-    .load(file))
+    .schema(schema_lineitem)
+    .load(file_lineitem))
 
-  val tpch6res = tpch6df.where(tpch6df("l_shipdate") >= to_date(lit("1994-01-01")) && tpch6df("l_shipdate") < to_date(lit("1995-01-01")) && tpch6df("l_discount") >= 0.05 && tpch6df("l_discount") <= 0.07 && tpch6df("l_quantity") < 24).agg(sum(tpch6df("l_extendedprice") * tpch6df("l_discount")) as ("revenue"))
+  val tpch6res = lineitem.where(lineitem("l_shipdate") >= to_date(lit("1994-01-01")) && lineitem("l_shipdate") < to_date(lit("1995-01-01")) && lineitem("l_discount") >= 0.05 && lineitem("l_discount") <= 0.07 && lineitem("l_quantity") < 24).agg(sum(lineitem("l_extendedprice") * lineitem("l_discount")) as ("revenue"))
 
   runDelite(tpch6res)
 
@@ -462,5 +697,54 @@ def tpch6() = {
   val stop = System.currentTimeMillis();
 
   println(">> " + (stop - start))
+}
+
+// TPCH - 14
+def tpch14() = {
+  val lineitem = (sqlContext.read
+    .format("com.databricks.spark.csv")
+    .option("delimiter", "|")
+    .option("header", "false") // use first line of all files as header
+    .option("inferschema", "false") // automatically infer data types
+    .schema(schema_lineitem)
+    .load(file_lineitem))
+
+  val part = (sqlContext.read
+    .format("com.databricks.spark.csv")
+    .option("delimiter", "|")
+    .option("header", "false") // use first line of all files as header
+    .option("inferschema", "false") // automatically infer data types
+    .schema(schema_part)
+    .load(file_part))
+
+  lineitem.registerTempTable("lineitem")
+  part.registerTempTable("part")
+
+  val tpch14res = sqlContext.sql(
+    "select " +
+      "100.00 * sum(case " +
+        "when p_type like 'PROMO%'" +
+        "then l_extendedprice * (1 - l_discount) " +
+        "else 0 " +
+      "end) / sum(l_extendedprice * (1 - l_discount)) as promo_revenue " +
+    "from " +
+      "lineitem, " +
+      "part " +
+    "where " +
+      "l_partkey = p_partkey " +
+      "and l_shipdate >= to_date('1995-09-01') " +
+      "and l_shipdate < to_date('1995-10-02')")
+
+
+  System.out.println(tpch14res.queryExecution.optimizedPlan)
+
+  runDelite(tpch14res)
+
+  val start = System.currentTimeMillis();
+  tpch14res.show()
+  val stop = System.currentTimeMillis();
+
+  println(">> " + (stop - start))
+
 }
 
