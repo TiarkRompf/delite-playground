@@ -2,12 +2,67 @@
 
 val folder = sys.env("DELITE_PLAY") + "/data/"
 // val file = folder + "tpch_2_17_0/dbgen/lineitem.tbl"
-val file = folder + "lineitem.csv"
+val file_part = folder + "part.csv"
+val file_supplier = folder + "supplier.csv"
+val file_partsupp = folder + "partsupp.csv"
+val file_customer = folder + "customer.csv"
+val file_orders = folder + "orders.csv"
+val file_lineitem = folder + "lineitem.csv"
+val file_nation = folder + "nation.csv"
+val file_region = folder + "region.csv"
 
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
 
-val schema = StructType(Seq(
+val schema_part = StructType(Seq(
+  StructField("p_partkey", IntegerType, true),
+  StructField("p_name", StringType, true),
+  StructField("p_mfgr", StringType, true),
+  StructField("p_brand", StringType, true),
+  StructField("p_type", StringType, true),
+  StructField("p_size", IntegerType, true),
+  StructField("p_container", StringType, true),
+  StructField("p_retailprice", DoubleType, true),
+  StructField("p_comment", StringType, true)))
+
+val schema_supplier = StructType(Seq(
+  StructField("s_suppkey", IntegerType, true),
+  StructField("s_name", StringType, true),
+  StructField("s_address", StringType, true),
+  StructField("s_nationkey", IntegerType, true),
+  StructField("s_phone", StringType, true),
+  StructField("s_acctbal", DoubleType, true),
+  StructField("s_comment", StringType, true)))
+
+val schema_partsupp = StructType(Seq(
+  StructField("ps_partkey", IntegerType, true),
+  StructField("ps_suppkey", IntegerType, true),
+  StructField("ps_availqty", IntegerType, true),
+  StructField("ps_supplycost", DoubleType, true),
+  StructField("ps_comment", StringType, true)))
+
+val schema_customer = StructType(Seq(
+  StructField("c_custkey", IntegerType, true),
+  StructField("c_name", StringType, true),
+  StructField("c_address", StringType, true),
+  StructField("c_nationkey", IntegerType, true),
+  StructField("c_phone", StringType, true),
+  StructField("c_accbal", DoubleType, true),
+  StructField("c_acctbal", StringType, true),
+  StructField("c_comment", StringType, true)))
+
+val schema_orders = StructType(Seq(
+  StructField("o_orderkey", IntegerType, true),
+  StructField("o_custkey", IntegerType, true),
+  StructField("o_orderstatus", StringType, true),
+  StructField("o_totalprice", DoubleType, true),
+  StructField("o_orderdate", DateType, true),
+  StructField("o_orderpriority", StringType, true),
+  StructField("o_clerk", StringType, true),
+  StructField("o_shippriority", IntegerType, true),
+  StructField("o_comment", StringType, true)))
+
+val schema_lineitem = StructType(Seq(
   StructField("l_orderkey", IntegerType, true),
   StructField("l_partkey", IntegerType, true),
   StructField("l_suppkey", IntegerType, true),
@@ -25,18 +80,19 @@ val schema = StructType(Seq(
   StructField("l_shipmode", StringType, true),
   StructField("l_comment", StringType, true)))
 
-val df = (sqlContext.read
-  .format("com.databricks.spark.csv")
-  .option("delimiter", "|")
-  .option("header", "false") // Use first line of all files as header
-  .option("inferSchema", "false") // Automatically infer data types
-  .schema(schema)
-  .load(file))
+val schema_nation = StructType(Seq(
+  StructField("n_nationkey", IntegerType, true),
+  StructField("n_name", StringType, true),
+  StructField("n_regionkey", IntegerType, true),
+  StructField("n_comment", StringType, true)))
 
-val dffilt = df.filter("l_quantity > 49")
-val res = dffilt.agg(sum(dffilt("l_quantity") + dffilt("l_linenumber") - dffilt("l_orderkey")))
+val schema_region = StructType(Seq(
+  StructField("r_regionkey", IntegerType, true),
+  StructField("r_name", StringType, true),
+  StructField("r_comment", StringType, true)))
 
 import org.apache.spark.sql.catalyst.plans.logical._
+import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.execution.datasources.LogicalRelation
 import org.apache.spark.sql.sources.BaseRelation
 import org.apache.spark.sql.DataFrame
