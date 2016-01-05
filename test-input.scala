@@ -108,7 +108,6 @@ import scala.reflect.{Manifest,SourceContext,ManifestFactory,RefinedManifest}
 import scala.virtualization.lms.common.Record
 import scala.math.Ordering
 import playground._
-// import org.joda.time.DateTime
 import java.util.{Date, Calendar}
 import java.text._
 
@@ -143,7 +142,6 @@ def getType(e: Option[Expression]) : Manifest[_] = e match {
 }
 
 def escapeDelim(c: Char) = if (c == '|') "\\|" else c.toString
-
 
 def runDelite(d: DataFrame): Any = {
 
@@ -229,6 +227,8 @@ def runDelite(d: DataFrame): Any = {
         field[T](rec, name)
       case Literal(value, DateType) =>
         conv_date(value.asInstanceOf[Int]).asInstanceOf[Rep[T]]
+      case Literal(value, StringType) =>
+        unit[String](String.valueOf(value)).asInstanceOf[Rep[T]]
       case Literal(value, _) =>
         unit[T](value.asInstanceOf[T])
       case And(left, right) =>
@@ -354,39 +354,35 @@ def runDelite(d: DataFrame): Any = {
         }
         res.asInstanceOf[Rep[T]]
       case CaseWhen(branches) =>
-        val res = d.dataType match {
-          case FloatType  =>
-            unit[Float](1.0f)
-          case DoubleType  =>
-            unit[Double](1.0)
-          case IntegerType =>
-            unit[Int](1)
-          case LongType =>
-            unit[Long](1L)
+        // val res = d.dataType match {
+        //   case FloatType  =>
+        //     unit[Float](1.0f)
+        //   case DoubleType  =>
+        //     unit[Double](1.0)
+        //   case IntegerType =>
+        //     unit[Int](1)
+        //   case LongType =>
+        //     unit[Long](1L)
+        // }
+        // res.asInstanceOf[Rep[T]]
+        def aux_t (list:Seq[Expression]): List[(Expression, Expression)] = list match {
+          case cond::value::q => (cond, value)::aux_t(q)
+          case _ => Nil
         }
-        res.asInstanceOf[Rep[T]]
-        // def aux_t (list:Seq[Expression]): Rep[List[(Expression, Expression)]] = list match {
-        //   case cond::value::q => (cond, value)::aux_t(q)
-        //   case default::Nil => (unit(true), compileExpr[Any](default)(rec))::unit(List())
-        //   case Nil => unit(List())
-        // }
-        // val list = aux_t(branches).map {
-        //   case (cond, value) => (compileExpr[Boolean](cond)(rec), compileExpr[Any](value)(rec))
-        // }
-        // System.out.println(branches)
-        // val (_, res) = aux_t(branches).find {
-        //   case ((found, res), (cond, value)) => if (found) (unit(true), res) else if (cond) (unit(true), value) else (unit(false), unit(null))
-        // }
-        //val res = list.find {
-        //  case (cond, value) => cond
-        //} match {
-        //  case Some((cond, value)) => value
-        //  case _ => throw new RuntimeException("Invalid casewhen syntax")
-        //}
-        //res.asInstanceOf[Rep[T]]
-      case StartsWith(string, pref) =>
-        val res = compileExpr[String](pref)(rec).startsWith(compileExpr[String](string)(rec))
-        res.asInstanceOf[Rep[T]]
+        val default = compileExpr[T](branches.last)(rec)
+
+        val list = aux_t(branches)
+        def case_t () : Rep[T] = {
+          list.foldRight (default) {
+            case ((cond, value), rhs) => if (compileExpr[Boolean](cond)(rec))
+                                            compileExpr[T](value)(rec)
+                                          else
+                                            rhs
+          }
+        }
+        case_t()
+      case StartsWith(str, pref) =>
+        compileExpr[String](str)(rec).startsWith(compileExpr[String](pref)(rec)).asInstanceOf[Rep[T]]
 
       case _ => throw new RuntimeException("compileExprn, TODO: " + getName(d) + ": " + d.dataType)
     }
@@ -432,7 +428,7 @@ def runDelite(d: DataFrame): Any = {
                       compareString(order, compileExpr[String](child)(x), compileExpr[String](child)(y))
                     }
                 }
-              case _ => throw new RuntimeException("Sorting Expression")
+              case _ => throw new RuntimeException("Sorting Expression " + p.getClass + " not supported")
             }
           }
         )(mfa, implicitly[SourceContext])
@@ -656,28 +652,6 @@ def tpch1() = {
 
 }
 
-// TPCH - 4
-def tpch4() = {
-  //val orders = (sqlContext.read
-  //  .format("com.databricks.spark.csv")
-  //  .option("delimiter", "|")
-  //  .option("header", "false") // use first line of all files as header
-  //  .option("inferschema", "false") // automatically infer data types
-  //  .schema(schema_orders)
-  //  .load(file_orders))
-
-  //val lineitem = (sqlContext.read
-  //  .format("com.databricks.spark.csv")
-  //  .option("delimiter", "|")
-  //  .option("header", "false") // use first line of all files as header
-  //  .option("inferschema", "false") // automatically infer data types
-  //  .schema(schema_lineitem)
-  //  .load(file_lineitem))
-
-
-  //val tpch4res =
-}
-
 // TPCH - 6
 def tpch6() = {
   val lineitem = (sqlContext.read
@@ -734,9 +708,6 @@ def tpch14() = {
       "l_partkey = p_partkey " +
       "and l_shipdate >= to_date('1995-09-01') " +
       "and l_shipdate < to_date('1995-10-02')")
-
-
-  System.out.println(tpch14res.queryExecution.optimizedPlan)
 
   runDelite(tpch14res)
 
