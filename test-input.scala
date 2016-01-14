@@ -2,14 +2,14 @@
 
 val folder = sys.env("DELITE_PLAY") + "/data/"
 // val file = folder + "tpch_2_17_0/dbgen/lineitem.tbl"
-val file_part = folder + "part.csv"
-val file_supplier = folder + "supplier.csv"
-val file_partsupp = folder + "partsupp.csv"
-val file_customer = folder + "customer.csv"
-val file_orders = folder + "orders.csv"
-val file_lineitem = folder + "lineitem.csv"
-val file_nation = folder + "nation.csv"
-val file_region = folder + "region.csv"
+val file_part = folder + "part.tbl"
+val file_supplier = folder + "supplier.tbl"
+val file_partsupp = folder + "partsupp.tbl"
+val file_customer = folder + "customer.tbl"
+val file_orders = folder + "orders.tbl"
+val file_lineitem = folder + "lineitem.tbl"
+val file_nation = folder + "nation.tbl"
+val file_region = folder + "region.tbl"
 
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
@@ -47,8 +47,8 @@ val schema_customer = StructType(Seq(
   StructField("c_address", StringType, true),
   StructField("c_nationkey", IntegerType, true),
   StructField("c_phone", StringType, true),
-  StructField("c_accbal", DoubleType, true),
-  StructField("c_acctbal", StringType, true),
+  StructField("c_acctbal", DoubleType, true),
+  StructField("c_mktsegment", StringType, true),
   StructField("c_comment", StringType, true)))
 
 val schema_orders = StructType(Seq(
@@ -105,7 +105,7 @@ import optiql.compiler._
 import optiql.library._
 import optiql.shared._
 import scala.reflect.{Manifest,SourceContext,ManifestFactory,RefinedManifest}
-import scala.virtualization.lms.common.Record
+import scala.virtualization.lms.common.{Record, TupleOps}
 import scala.math.Ordering
 import playground._
 import java.util.{Date, Calendar}
@@ -273,6 +273,16 @@ def runDelite(d: DataFrame): Any = {
           case StringType   => compileExpr[String](a)(rec) >= compileExpr[String](b)(rec)
         }
         bo.asInstanceOf[Rep[T]]
+      case EqualTo(a,b) =>
+        val bo = a.dataType match {
+          case FloatType    => compileExpr[Float](a)(rec) == compileExpr[Float](b)(rec)
+          case DoubleType   => compileExpr[Double](a)(rec) == compileExpr[Double](b)(rec)
+          case IntegerType  => compileExpr[Int](a)(rec) == compileExpr[Int](b)(rec)
+          case LongType     => compileExpr[Long](a)(rec) == compileExpr[Long](b)(rec)
+          case DateType     => compileExpr[Date](a)(rec) == compileExpr[Date](b)(rec)
+          case StringType   => compileExpr[String](a)(rec) == compileExpr[String](b)(rec)
+        }
+        bo.asInstanceOf[Rep[T]]
       case Alias(child, name) =>
         compileExpr[T](child)(rec)
       case Sum(child) =>
@@ -303,7 +313,7 @@ def runDelite(d: DataFrame): Any = {
       case Cast(child, dataType) =>
         compileExpr[T](child)(rec)
       case Count(child) =>
-        val res = rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Int](child)(l))
+        val res = rec.asInstanceOf[Rep[Table[Record]]].Sum(l => unit[Int](1))
         res.asInstanceOf[Rep[T]]
       case Add(left, right) =>
         val res = left.dataType match {
@@ -354,21 +364,11 @@ def runDelite(d: DataFrame): Any = {
         }
         res.asInstanceOf[Rep[T]]
       case CaseWhen(branches) =>
-        // val res = d.dataType match {
-        //   case FloatType  =>
-        //     unit[Float](1.0f)
-        //   case DoubleType  =>
-        //     unit[Double](1.0)
-        //   case IntegerType =>
-        //     unit[Int](1)
-        //   case LongType =>
-        //     unit[Long](1L)
-        // }
-        // res.asInstanceOf[Rep[T]]
         def aux_t (list:Seq[Expression]): List[(Expression, Expression)] = list match {
           case cond::value::q => (cond, value)::aux_t(q)
           case _ => Nil
         }
+
         val default = compileExpr[T](branches.last)(rec)
 
         val list = aux_t(branches)
@@ -383,8 +383,15 @@ def runDelite(d: DataFrame): Any = {
         case_t()
       case StartsWith(str, pref) =>
         compileExpr[String](str)(rec).startsWith(compileExpr[String](pref)(rec)).asInstanceOf[Rep[T]]
+      case EndsWith(str, suff) =>
+        compileExpr[String](str)(rec).startsWith(compileExpr[String](suff)(rec)).asInstanceOf[Rep[T]]
+      case Contains(str, suff) =>
+        compileExpr[String](str)(rec).contains(compileExpr[String](suff)(rec)).asInstanceOf[Rep[T]]
+      case Year(exp) =>
+        primitive_forge_int_shift_right_unsigned(date_value(compileExpr[Date](exp)(rec)), unit[Int](9)).asInstanceOf[Rep[T]]
 
-      case _ => throw new RuntimeException("compileExprn, TODO: " + getName(d) + ": " + d.dataType)
+
+      case _ => throw new RuntimeException("compileExpr, TODO: " + d.getClass.getName + ": " + d.dataType)
     }
 
     def getName(p: Expression): String = p match {
@@ -393,9 +400,47 @@ def runDelite(d: DataFrame): Any = {
       case _ => throw new RuntimeException("getName, TODO: " + p.getClass.getName)
     }
 
+    def fieldInRecord(man: RefinedManifest[Record], exp: Expression) : Boolean = exp match {
+      case AttributeReference(name, _, _, _) =>
+        man.fields.exists {
+          case (n, _) => n == name
+        }
+      case _ => true
+    }
+
+    def compileCond(cond: Option[Expression], mfl: RefinedManifest[Record], mfr: RefinedManifest[Record]) : (Rep[Record] => Rep[Any], Rep[Record] => Rep[Any], Manifest[Any]) = cond match {
+      case Some(EqualTo(le, re)) =>
+        val mfk = getType(cond).asInstanceOf[Manifest[Any]]
+        val lekey = (p: Rep[Record]) => { compileExpr[Any](le)(p)(mfk) }
+        val rekey = (p: Rep[Record]) => { compileExpr[Any](re)(p)(mfk) }
+        if (fieldInRecord(mfl, le) && fieldInRecord(mfr, re)) {
+          (lekey, rekey, mfk)
+        } else if (fieldInRecord(mfl, re) && fieldInRecord(mfr, le)) {
+          (rekey, lekey, mfk)
+        } else {
+          throw new RuntimeException("Invalid syntax")
+        }
+      case Some(And(le, re)) =>
+        val (llekey, rlekey, lmfk) = compileCond(Some(le), mfl, mfr)
+        val (lrekey, rrekey, rmfk) = compileCond(Some(re), mfl, mfr)
+        val pos = implicitly[SourceContext]
+
+        val lekey = (p: Rep[Record]) => { tup2_pack((llekey(p), lrekey(p)))(lmfk, rmfk, pos, new Overload4()) }
+        val rekey = (p: Rep[Record]) => { tup2_pack((rlekey(p), rrekey(p)))(lmfk, rmfk, pos, new Overload4()) }
+        val mfk = m_Tup2(lmfk, rmfk).asInstanceOf[Manifest[Any]]
+        (lekey, rekey, mfk)
+
+      case Some(value) => throw new RuntimeException("Join: unsupported operation " + value.getClass.getName)
+      case None =>
+        val key = (p: Rep[Record]) => { unit[Int](1) }
+        val mfk = manifest[Int].asInstanceOf[Manifest[Any]]
+        (key, key, mfk)
+    }
+
     def compile(d: LogicalPlan): Rep[Table[Record]] = d match {
       case Sort(sortingExpr, global, child) =>
         val res = compile(child)
+        System.out.println("Sort")
         val mfa = extractMF(res)
         table_orderby(
           res,
@@ -434,6 +479,9 @@ def runDelite(d: DataFrame): Any = {
         )(mfa, implicitly[SourceContext])
       case Aggregate(groupingExpr, aggregateExpr, child) =>
         val res = compile(child)
+        System.out.println("Aggregate")
+        System.out.println(groupingExpr)
+        System.out.println(aggregateExpr)
 
         if (aggregateExpr.length == 0)
           return res
@@ -478,30 +526,37 @@ def runDelite(d: DataFrame): Any = {
             }
           )(mfa, mfk, pos)
 
+
           val mfg = extractMF(group)
-          val mkt = m_Tup2(mfk,res.tp)
-          val arr = table_select(
+          table_select(
               group,
               { (coup:Rep[Tup2[Any, Table[Record]]]) =>
+                System.out.println("A")
                 val key = tup2__1(coup)(mfk, pos)
                 val tab = tup2__2(coup)(res.tp.asInstanceOf[Manifest[Table[Record]]],pos)
+                System.out.println("B")
+                System.out.println(extractMF(tab))
                 record_new[Record](aggregateExpr.map {
                   (p:NamedExpression) =>
+                  System.out.println(p.getClass.getName)
                   val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                  p match {
+                  System.out.println(mfp)
+                  val tmp = p match {
                     case AttributeReference(_, _, _, _) =>
                       (getName(p), false, {(x:Any) => compileExpr[Any](p)(key)(mfp)})
                     case _ =>
                       (getName(p), false, {(x:Any) => compileExpr[Any](p)(tab)(mfp)})
                   }
+                  tmp
                 })(mfo)
               }
              )(mfg, mfo, pos)
-          arr
         }
 
       case Project(projectList, child) =>
         val res = compile(child)
+        System.out.println("Project")
+        System.out.println(projectList)
 
         if (projectList.length == 0)
           return res
@@ -525,6 +580,7 @@ def runDelite(d: DataFrame): Any = {
         )(mfb, mfa, implicitly[SourceContext])
       case Filter(condition, child) =>
         val res = compile(child)
+        System.out.println("Filter")
         val mf = extractMF(res)
         table_where(res, { (rec:Rep[Record]) =>
           compileExpr[Boolean](condition)(rec)
@@ -556,32 +612,30 @@ def runDelite(d: DataFrame): Any = {
       case Join(left, right, tpe, cond) =>
         val resl = compile(left)
         val resr = compile(right)
+        System.out.println("Join")
 
         val mfl = extractMF(resl)
         val mfr = extractMF(resr)
-        val mfk = getType(cond).asInstanceOf[Manifest[Any]]
         val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
 
-        cond match {
-          case Some(EqualTo(le, re)) =>
-            val lkey = (p: Rep[Record]) => { compileExpr[Any](le)(p)(mfk) }
-            val rkey = (p: Rep[Record]) => { compileExpr[Any](re)(p)(mfk) }
-            val reskey = (l: Rep[Record], r: Rep[Record]) => {
-              record_new[Record](
-                mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
-                  case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
-                }
-                ++
-                mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
-                  case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
-                }
-              )(mfo)
-            }
-            tpe match {
-              case Inner => table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
-              case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
-            }
-          case _ => throw new RuntimeException("Non binary expression not supported is not supported")
+        tpe match {
+          case Inner =>
+            val reskey =
+              (l: Rep[Record], r: Rep[Record]) => {
+                record_new[Record](
+                  mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
+                    case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
+                  }
+                  ++
+                  mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
+                    case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
+                  }
+                )(mfo)
+              }
+
+            val (lkey, rkey, mfk) = compileCond(cond, mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
+            table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
+          case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
         }
       case _ => throw new RuntimeException("unknown query operator: " + d.getClass)
     }
@@ -591,131 +645,418 @@ def runDelite(d: DataFrame): Any = {
       tpchDataPath = unit(folder)
       val res = compile(d.queryExecution.optimizedPlan)
       val mf = extractMF(res)
+      System.out.println("OK")
       infix_printAsTable(res)(mf, implicitly[SourceContext])
     }
   }
   DeliteRunner.compileAndTest(DeliteQuery)
 }
 
-//runDelite(res)
-// res.show()
-
-// test sql
-
-//df.registerTempTable("lineitem")
-
 def deliteSQL(s: String) = runDelite(sqlContext.sql(s))
 
+// Tables
+val customer = (sqlContext.read
+  .format("com.databricks.spark.csv")
+  .option("delimiter", "|")
+  .option("header", "false") // use first line of all files as header
+  .option("inferschema", "false") // automatically infer data types
+  .schema(schema_customer)
+  .load(file_customer))
+
+val orders = (sqlContext.read
+  .format("com.databricks.spark.csv")
+  .option("delimiter", "|")
+  .option("header", "false") // use first line of all files as header
+  .option("inferschema", "false") // automatically infer data types
+  .schema(schema_orders)
+  .load(file_orders))
+
+val lineitem = (sqlContext.read
+  .format("com.databricks.spark.csv")
+  .option("delimiter", "|")
+  .option("header", "false") // use first line of all files as header
+  .option("inferschema", "false") // automatically infer data types
+  .schema(schema_lineitem)
+  .load(file_lineitem))
+
+val part = (sqlContext.read
+  .format("com.databricks.spark.csv")
+  .option("delimiter", "|")
+  .option("header", "false") // use first line of all files as header
+  .option("inferschema", "false") // automatically infer data types
+  .schema(schema_part)
+  .load(file_part))
+
+val supplier = (sqlContext.read
+  .format("com.databricks.spark.csv")
+  .option("delimiter", "|")
+  .option("header", "false") // use first line of all files as header
+  .option("inferschema", "false") // automatically infer data types
+  .schema(schema_supplier)
+  .load(file_supplier))
+
+val partsupp = (sqlContext.read
+  .format("com.databricks.spark.csv")
+  .option("delimiter", "|")
+  .option("header", "false") // use first line of all files as header
+  .option("inferschema", "false") // automatically infer data types
+  .schema(schema_partsupp)
+  .load(file_partsupp))
+
+val nation = (sqlContext.read
+  .format("com.databricks.spark.csv")
+  .option("delimiter", "|")
+  .option("header", "false") // use first line of all files as header
+  .option("inferschema", "false") // automatically infer data types
+  .schema(schema_nation)
+  .load(file_nation))
+
+val region = (sqlContext.read
+  .format("com.databricks.spark.csv")
+  .option("delimiter", "|")
+  .option("header", "false") // use first line of all files as header
+  .option("inferschema", "false") // automatically infer data types
+  .schema(schema_region)
+  .load(file_region))
+
+customer.registerTempTable("customer")
+orders.registerTempTable("orders")
+lineitem.registerTempTable("lineitem")
+part.registerTempTable("part")
+supplier.registerTempTable("supplier")
+partsupp.registerTempTable("partsupp")
+nation.registerTempTable("nation")
+region.registerTempTable("region")
+
+
 // TPCH - 1
-def tpch1() = {
-  val lineitem = (sqlContext.read
-    .format("com.databricks.spark.csv")
-    .option("delimiter", "|")
-    .option("header", "false") // use first line of all files as header
-    .option("inferschema", "false") // automatically infer data types
-    .schema(schema_lineitem)
-    .load(file_lineitem))
+val tpch1 =
+  """select
+    | l_returnflag,
+    | l_linestatus,
+    | sum(l_quantity) as sum_qty,
+    | sum(l_extendedprice) as sum_base_price,
+    | sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
+    | sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
+    | avg(l_quantity) as avg_qty,
+    | avg(l_extendedprice) as avg_price,
+    | avg(l_discount) as avg_disc,
+    | count(*) as count_order
+    |from
+    | lineitem
+    |where
+    | l_shipdate <= to_date('1998-09-02')
+    |group by
+    | l_returnflag,
+    | l_linestatus
+    |order by
+    | l_returnflag,
+    | l_linestatus""".stripMargin
 
-  lineitem.registerTempTable("lineitem")
-//  val tpch1res = lineitem.where(lineitem("l_shipdate") <= to_date(lit("1998-12-01"))).groupBy("l_returnflag", "l_linestatus").agg(sum("l_quantity") as "sum_qty", sum("l_extendedprice") as "sum_base_price", sum(lineitem("l_extendedprice") * (lit(1) - lineitem("l_discount"))) as "sum_disc_price", sum(lineitem("l_extendedprice") * (lit(1) - lineitem("l_discount")) * (lit(1) + lineitem("l_tax"))) as "sum_charge", avg("l_quantity") as "avg_qty", avg("l_extendedprice") as "avg_price", avg("l_discount") as "avg_disc", count("*") as "count_order")
+// TPCH - 2
+val tpch2 =
+  """select
+    | s_acctbal,
+    | s_name,
+    | n_name,
+    | p_partkey,
+    | p_mfgr,
+    | s_address,
+    | s_phone,
+    | s_comment
+    |from
+    | part,
+    | supplier,
+    | partsupp,
+    | nation,
+    | region
+    |where
+    | p_partkey = ps_partkey
+    | and s_suppkey = ps_suppkey
+    | and p_size = 15
+    | and p_type like '%BRASS'
+    | and s_nationkey = n_nationkey
+    | and n_regionkey = r_regionkey
+    | and r_name = 'EUROPE'
+    | and ps_supplycost = (
+    |   select
+    |     min(ps_supplycost)
+    |   from
+    |     partsupp, supplier,
+    |     nation, region
+    |   where
+    |     p_partkey = ps_partkey
+    |     and s_suppkey = ps_suppkey
+    |     and s_nationkey = n_nationkey
+    |     and n_regionkey = r_regionkey
+    |     and r_name = 'EUROPE'" +
+    |   )
+    |order by
+    | s_acctbal desc,
+    | n_name,
+    | s_name,
+    | p_partkey""".stripMargin
 
-  val tpch1res = sqlContext.sql(
-    "select " +
-      "l_returnflag, " +
-      "l_linestatus, " +
-      "sum(l_quantity) as sum_qty, " +
-      "sum(l_extendedprice) as sum_base_price, " +
-      "sum(l_extendedprice * (1 - l_discount)) as sum_disc_price, " +
-      "sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge, " +
-      "avg(l_quantity) as avg_qty, " +
-      "avg(l_extendedprice) as avg_price, " +
-      "avg(l_discount) as avg_disc, " +
-      "count(*) as count_order " +
-    "from " +
-      "lineitem " +
-    "where " +
-      "l_shipdate <= to_date('1998-09-02') " +
-    "group by " +
-      "l_returnflag, " +
-      "l_linestatus " +
-    "order by " +
-      "l_returnflag, " +
-      "l_linestatus")
+// TPCH - 3
+val tpch3 =
+  """select
+    | l_orderkey,
+    | sum(l_extendedprice*(1-l_discount)) as revenue,
+    | o_orderdate,
+    | o_shippriority
+    |from
+    | customer,
+    | orders,
+    | lineitem
+    |where
+    | c_mktsegment = 'BUILDING'
+    | and c_custkey = o_custkey
+    | and l_orderkey = o_orderkey
+    | and o_orderdate < to_date('1995-03-15')
+    | and l_shipdate > to_date('1995-03-15')
+    |group by
+    | l_orderkey,
+    | o_orderdate,
+    | o_shippriority
+    |order by
+    | revenue desc,
+    | o_orderdate""".stripMargin
 
-  runDelite(tpch1res)
+// TPCH - 4
+val tpch4 =
+    """select
+      | o_orderpriority,
+      | count(*) as order_count
+      |from
+      | orders
+      |where
+      | o_orderdate >= to_date('1993-07-01')
+      | and o_orderdate < to_date('1993-10-01')
+      | and exists (
+      |   select
+      |     *
+      |   from
+      |     lineitem
+      |   where
+      |     l_orderkey = o_orderkey
+      |     and l_commitdate < l_receiptdate
+      |   )
+      |group by
+      | o_orderpriority
+      |order by
+      | o_orderpriority""".stripMargin
 
-  val start = System.currentTimeMillis();
-  tpch1res.show()
-  val stop = System.currentTimeMillis();
-
-  println(">> " + (stop - start))
-
-}
+// TPCH - 5
+val tpch5 =
+  """select
+    | n_name,
+    | sum(l_extendedprice * (1 - l_discount)) as revenue
+    |from
+    | customer,
+    | orders,
+    | lineitem,
+    | supplier,
+    | nation,
+    | region
+    |where
+    | c_custkey = o_custkey
+    | and l_orderkey = o_orderkey
+    | and l_suppkey = s_suppkey
+    | and c_nationkey = s_nationkey
+    | and s_nationkey = n_nationkey
+    | and n_regionkey = r_regionkey
+    | and r_name = 'ASIA'
+    | and o_orderdate >= to_date('1994-01-01')
+    | and o_orderdate < to_date('1995-01-01')
+    |group by
+    | n_name
+    |order by
+    | revenue desc""".stripMargin
 
 // TPCH - 6
-def tpch6() = {
-  val lineitem = (sqlContext.read
-    .format("com.databricks.spark.csv")
-    .option("delimiter", "|")
-    .option("header", "false") // use first line of all files as header
-    .option("inferschema", "false") // automatically infer data types
-    .schema(schema_lineitem)
-    .load(file_lineitem))
+// val tpch6res = lineitem.where(lineitem("l_shipdate") >= to_date(lit("1994-01-01")) && lineitem("l_shipdate") < to_date(lit("1995-01-01")) && lineitem("l_discount") >= 0.05 && lineitem("l_discount") <= 0.07 && lineitem("l_quantity") < 24).agg(sum(lineitem("l_extendedprice") * lineitem("l_discount")) as ("revenue"))
+val tpch6 =
+  """select
+    | sum(l_extendedprice*l_discount) as revenue
+    |from
+    | lineitem
+    |where
+    | l_shipdate >= to_date('1994-01-01')
+    | and l_shipdate < to_date('1995-01-01')
+    | and l_discount between 0.05 and 0.07
+    | and l_quantity < 24""".stripMargin
 
-  val tpch6res = lineitem.where(lineitem("l_shipdate") >= to_date(lit("1994-01-01")) && lineitem("l_shipdate") < to_date(lit("1995-01-01")) && lineitem("l_discount") >= 0.05 && lineitem("l_discount") <= 0.07 && lineitem("l_quantity") < 24).agg(sum(lineitem("l_extendedprice") * lineitem("l_discount")) as ("revenue"))
+// TPCH - 7
+val tpch7 =
+  """select
+    | supp_nation,
+    | cust_nation,
+    | l_year, sum(volume) as revenue
+    |from (
+    | select
+    |   n1.n_name as supp_nation,
+    |   n2.n_name as cust_nation,
+    |   year(l_shipdate) as l_year,
+    |   l_extendedprice * (1 - l_discount) as volume
+    | from
+    |   supplier,
+    |   lineitem,
+    |   orders,
+    |   customer,
+    |   nation n1,
+    |   nation n2
+    | where
+    |   s_suppkey = l_suppkey
+    |   and o_orderkey = l_orderkey
+    |   and c_custkey = o_custkey
+    |   and s_nationkey = n1.n_nationkey
+    |   and c_nationkey = n2.n_nationkey
+    |   and (
+    |     (n1.n_name = 'FRANCE' and n2.n_name = 'GERMANY')
+    |     or (n1.n_name = 'GERMANY' and n2.n_name = 'FRANCE')
+    |   )
+    |   and l_shipdate between to_date('1995-01-01') and to_date('1996-12-31')
+    | ) as shipping
+    |group by
+    | supp_nation,
+    | cust_nation,
+    | l_year
+    |order by
+    | supp_nation,
+    | cust_nation,
+    | l_year""".stripMargin
 
-  runDelite(tpch6res)
+// TPCH - 8
+val tpch8 =
+  """select
+    | o_year,
+    | sum(case
+    |   when nation = 'BRAZIL'
+    |   then volume
+    | else 0
+    | end) / sum(volume) as mkt_share
+    |from (
+    | select
+    |   year(o_orderdate) as o_year,
+    |   l_extendedprice * (1-l_discount) as volume,
+    |   n2.n_name as nation
+    | from
+    |   part,
+    |   supplier,
+    |   lineitem,
+    |   orders,
+    |   customer,
+    |   nation n1,
+    |   nation n2,
+    |   region
+    | where
+    |   p_partkey = l_partkey
+    |   and s_suppkey = l_suppkey
+    |   and l_orderkey = o_orderkey
+    |   and o_custkey = c_custkey
+    |   and c_nationkey = n1.n_nationkey
+    |   and n1.n_regionkey = r_regionkey
+    |   and r_name = 'AMERICA'
+    |   and s_nationkey = n2.n_nationkey
+    |   and o_orderdate between to_date('1995-01-01') and to_date('1996-12-31')
+    |   and p_type = 'ECONOMY ANODIZED STEEL'
+    | ) as all_nations
+    |group by
+    | o_year
+    |order by
+    | o_year""".stripMargin
 
-  val start = System.currentTimeMillis();
-  tpch6res.show()
-  val stop = System.currentTimeMillis();
+// TPCH - 9
+val tpch9 =
+  """select
+    | nation,
+    | o_year,
+    | sum(amount) as sum_profit
+    |from (
+    | select
+    |   n_name as nation,
+    |   year(o_orderdate) as o_year,
+    |   l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
+    | from
+    |   part,
+    |   supplier,
+    |   lineitem,
+    |   partsupp,
+    |   orders,
+    |   nation
+    | where
+    |   s_suppkey = l_suppkey
+    |   and ps_suppkey = l_suppkey
+    |   and ps_partkey = l_partkey
+    |   and p_partkey = l_partkey
+    |   and o_orderkey = l_orderkey
+    |   and s_nationkey = n_nationkey
+    |   and p_name like '%green%'
+    | ) as profit
+    |group by
+    | nation,
+    | o_year
+    |order by
+    | nation,
+    | o_year desc""".stripMargin
 
-  println(">> " + (stop - start))
+// TPCH - 10
+val tpch10 =
+  """select
+    | c_custkey,
+    | c_name,
+    | sum(l_extendedprice * (1 - l_discount)) as revenue,
+    | c_acctbal,
+    | n_name,
+    | c_address,
+    | c_phone,
+    | c_comment
+    |from
+    | customer,
+    | orders,
+    | lineitem,
+    | nation
+    |where
+    | c_custkey = o_custkey
+    | and l_orderkey = o_orderkey
+    | and o_orderdate >= to_date('1993-10-01')
+    | and o_orderdate < to_date('1994-01-01')
+    | and l_returnflag = 'R'
+    | and c_nationkey = n_nationkey
+    |group by
+    | c_custkey,
+    | c_name,
+    | c_acctbal,
+    | c_phone,
+    | n_name,
+    | c_address,
+    | c_comment
+    |order by
+    | revenue desc""".stripMargin
+
+val tpch14 =
+  """select
+    | 100.00 * sum(case
+    |   when p_type like 'PROMO%'
+    |   then l_extendedprice * (1 - l_discount)
+    |   else 0
+    | end) / sum(l_extendedprice * (1 - l_discount)) as promo_revenue
+    |from
+    | lineitem,
+    | part
+    |where
+    | l_partkey = p_partkey
+    | and l_shipdate >= to_date('1995-09-01')
+    | and l_shipdate < to_date('1995-10-02')""".stripMargin
+
+
+
+def testSQL(s: String) = {
+  val res = sqlContext.sql(s)
+
+  System.out.println(res.queryExecution.optimizedPlan)
+
+  runDelite(res)
+
+  res.show()
 }
-
-// TPCH - 14
-def tpch14() = {
-  val lineitem = (sqlContext.read
-    .format("com.databricks.spark.csv")
-    .option("delimiter", "|")
-    .option("header", "false") // use first line of all files as header
-    .option("inferschema", "false") // automatically infer data types
-    .schema(schema_lineitem)
-    .load(file_lineitem))
-
-  val part = (sqlContext.read
-    .format("com.databricks.spark.csv")
-    .option("delimiter", "|")
-    .option("header", "false") // use first line of all files as header
-    .option("inferschema", "false") // automatically infer data types
-    .schema(schema_part)
-    .load(file_part))
-
-  lineitem.registerTempTable("lineitem")
-  part.registerTempTable("part")
-
-  val tpch14res = sqlContext.sql(
-    "select " +
-      "100.00 * sum(case " +
-        "when p_type like 'PROMO%'" +
-        "then l_extendedprice * (1 - l_discount) " +
-        "else 0 " +
-      "end) / sum(l_extendedprice * (1 - l_discount)) as promo_revenue " +
-    "from " +
-      "lineitem, " +
-      "part " +
-    "where " +
-      "l_partkey = p_partkey " +
-      "and l_shipdate >= to_date('1995-09-01') " +
-      "and l_shipdate < to_date('1995-10-02')")
-
-  runDelite(tpch14res)
-
-  val start = System.currentTimeMillis();
-  tpch14res.show()
-  val stop = System.currentTimeMillis();
-
-  println(">> " + (stop - start))
-
-}
-
