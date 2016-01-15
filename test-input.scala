@@ -98,8 +98,10 @@ import org.apache.spark.sql.sources.BaseRelation
 import org.apache.spark.sql.DataFrame
 import com.databricks.spark.csv.CsvRelation
 import org.apache.spark.sql.catalyst.expressions._
+import org.apache.spark.sql.catalyst.expressions.aggregate._
 
 val lgr = "org.apache.spark.sql.execution.datasources.LogicalRelation"
+val aggexp= "org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression"
 
 import optiql.compiler._
 import optiql.library._
@@ -222,6 +224,38 @@ def runDelite(d: DataFrame): Any = {
                 tpe)
     }
 
+    def compileAggExpr[T:Manifest](d: AggregateFunction)(rec: Rep[_]): Rep[T] = d match {
+      case Sum(child) =>
+        val res = child.dataType match {
+          case FloatType  =>
+            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Float](child)(l))
+          case DoubleType  =>
+            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Double](child)(l))
+          case IntegerType =>
+            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Int](child)(l))
+          case LongType =>
+            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Long](child)(l))
+        }
+        res.asInstanceOf[Rep[T]]
+      case Average(child) =>
+        val res = child.dataType match {
+          case FloatType  =>
+            rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Float](child)(l))
+          case DoubleType  =>
+            rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Double](child)(l))
+          //case IntegerType =>
+          //  rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Fractional[Int]](child)(l))
+          //case LongType =>
+          //  rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Fractional[Long]](child)(l))
+          case _ => throw new RuntimeException("Average, " + child.dataType)
+        }
+        res.asInstanceOf[Rep[T]]
+      case Count(child) =>
+        val res = rec.asInstanceOf[Rep[Table[Record]]].Sum(l => unit[Long](1))
+        res.asInstanceOf[Rep[T]]
+      case _ => throw new RuntimeException("TODO: AggregateExpression, " + d.getClass.getName)
+    }
+
     def compileExpr[T:Manifest](d: Expression)(rec: Rep[_]): Rep[T] = d match {
       case AttributeReference(name, _, _, _) =>
         field[T](rec, name)
@@ -285,36 +319,10 @@ def runDelite(d: DataFrame): Any = {
         bo.asInstanceOf[Rep[T]]
       case Alias(child, name) =>
         compileExpr[T](child)(rec)
-      case Sum(child) =>
-        val res = child.dataType match {
-          case FloatType  =>
-            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Float](child)(l))
-          case DoubleType  =>
-            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Double](child)(l))
-          case IntegerType =>
-            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Int](child)(l))
-          case LongType =>
-            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Long](child)(l))
-        }
-        res.asInstanceOf[Rep[T]]
-      case Average(child) =>
-        val res = child.dataType match {
-          case FloatType  =>
-            rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Float](child)(l))
-          case DoubleType  =>
-            rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Double](child)(l))
-          //case IntegerType =>
-          //  rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Fractional[Int]](child)(l))
-          //case LongType =>
-          //  rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Fractional[Long]](child)(l))
-          case _ => throw new RuntimeException("Average, " + child.dataType)
-        }
-        res.asInstanceOf[Rep[T]]
       case Cast(child, dataType) =>
         compileExpr[T](child)(rec)
-      case Count(child) =>
-        val res = rec.asInstanceOf[Rep[Table[Record]]].Sum(l => unit[Int](1))
-        res.asInstanceOf[Rep[T]]
+    //  case AggregateExpression(func, mode, isDistinct) =>
+    //    compileExpr[T](func)(rec)
       case Add(left, right) =>
         val res = left.dataType match {
           case FloatType  =>
@@ -390,8 +398,16 @@ def runDelite(d: DataFrame): Any = {
       case Year(exp) =>
         primitive_forge_int_shift_right_unsigned(date_value(compileExpr[Date](exp)(rec)), unit[Int](9)).asInstanceOf[Rep[T]]
 
-
-      case _ => throw new RuntimeException("compileExpr, TODO: " + d.getClass.getName + ": " + d.dataType)
+      case a : Expression if a.getClass.getName == aggexp =>
+        System.out.println("Here")
+        // class AggregateExpression is private, so we use reflection
+        // to get around access control
+        val fld = a.getClass.getDeclaredFields.filter(_.getName == "aggregateFunction").head
+        fld.setAccessible(true)
+        val children = fld.get(a).asInstanceOf[AggregateFunction]
+        compileAggExpr[T](children)(rec)
+      case _ =>
+        throw new RuntimeException("compileExpr, TODO: " + d.getClass.getName)
     }
 
     def getName(p: Expression): String = p match {
