@@ -133,8 +133,8 @@ def convertDataType(e: DataType) : Manifest[_] = e match {
 }
 
 def convertType(e: Expression): Manifest[_] = e match {
-  case Count(_) => manifest[Int]
-  case Alias(Count(_), _) => manifest[Int]
+  case Count(_) => manifest[Long]
+  case Alias(Count(_), _) => manifest[Long]
   case _ => convertDataType(e.dataType)
 }
 
@@ -148,57 +148,6 @@ def escapeDelim(c: Char) = if (c == '|') "\\|" else c.toString
 def runDelite(d: DataFrame): Any = {
 
   object DeliteQuery extends OptiQLApplicationCompiler with TPCHQ1Trait with DeliteTestRunner {
-    def compareFloat(d: SortDirection, x: Rep[Float], y: Rep[Float]) : Rep[Int] = {
-      if (x < y)
-        return if (d == Ascending) unit(-1) else unit(1)
-      if (x > y)
-        return if (d == Ascending) unit(1) else unit(-1)
-
-      unit(0)
-    }
-
-    def compareDouble(d: SortDirection, x: Rep[Double], y: Rep[Double]) : Rep[Int] = {
-      if (x < y)
-        return if (d == Ascending) unit(-1) else unit(1)
-      if (x > y)
-        return if (d == Ascending) unit(1) else unit(-1)
-
-      unit(0)
-    }
-
-    def compareInt(d: SortDirection, x: Rep[Int], y: Rep[Int]) : Rep[Int] = {
-      if (x < y)
-        return if (d == Ascending) unit(-1) else unit(1)
-      if (x > y)
-        return if (d == Ascending) unit(1) else unit(-1)
-
-      unit(0)
-    }
-
-    def compareLong(d: SortDirection, x: Rep[Long], y: Rep[Long]) : Rep[Int] = {
-      if (x < y)
-        return if (d == Ascending) unit(-1) else unit(1)
-      if (x > y)
-        return if (d == Ascending) unit(1) else unit(-1)
-
-      unit(0)
-    }
-    def compareString(d: SortDirection, x: Rep[String], y: Rep[String]) : Rep[Int] = {
-      if (x < y)
-        return if (d == Ascending) unit(-1) else unit(1)
-      if (x > y)
-        return if (d == Ascending) unit(1) else unit(-1)
-
-      unit(0)
-    }
-    def compareDate(d: SortDirection, x: Rep[Date], y: Rep[Date]) : Rep[Int] = {
-      if (x < y)
-        return if (d == Ascending) unit(-1) else unit(1)
-      if (x > y)
-        return if (d == Ascending) unit(1) else unit(-1)
-
-      unit(0)
-    }
 
     def extractMF[T](x: Rep[Table[T]]): Manifest[T] = {
      //  println(x.tp.typeArguments)
@@ -465,29 +414,59 @@ def runDelite(d: DataFrame): Any = {
               case SortOrder(child, order) =>
                 child.dataType match {
                   case FloatType =>
-                    (x:Rep[Record], y:Rep[Record]) => {
-                      compareFloat(order, compileExpr[Float](child)(x), compileExpr[Float](child)(y))
-                    }
+                    if (order == Ascending)
+                      (x:Rep[Record], y:Rep[Record]) => {
+                        (compileExpr[Float](child)(x) - compileExpr[Float](child)(y)).toInt
+                      }
+                    else
+                      (x:Rep[Record], y:Rep[Record]) => {
+                        (compileExpr[Float](child)(y) - compileExpr[Float](child)(x)).toInt
+                      }
                   case DoubleType =>
-                    (x:Rep[Record], y:Rep[Record]) => {
-                      compareDouble(order, compileExpr[Double](child)(x), compileExpr[Double](child)(y))
-                    }
+                    if (order == Ascending)
+                      (x:Rep[Record], y:Rep[Record]) => {
+                        (compileExpr[Double](child)(x) - compileExpr[Double](child)(y)).toInt
+                      }
+                    else
+                      (x:Rep[Record], y:Rep[Record]) => {
+                        (compileExpr[Double](child)(y) - compileExpr[Double](child)(x)).toInt
+                      }
                   case IntegerType =>
-                    (x:Rep[Record], y:Rep[Record]) => {
-                      compareInt(order, compileExpr[Int](child)(x), compileExpr[Int](child)(y))
-                    }
+                    if (order == Ascending)
+                      (x:Rep[Record], y:Rep[Record]) => {
+                        compileExpr[Int](child)(x) - compileExpr[Int](child)(y)
+                      }
+                    else
+                      (x:Rep[Record], y:Rep[Record]) => {
+                        compileExpr[Int](child)(y) - compileExpr[Int](child)(x)
+                      }
                   case LongType =>
-                    (x:Rep[Record], y:Rep[Record]) => {
-                      compareLong(order, compileExpr[Long](child)(x), compileExpr[Long](child)(y))
-                    }
+                    if (order == Ascending)
+                      (x:Rep[Record], y:Rep[Record]) => {
+                        (compileExpr[Long](child)(x) - compileExpr[Long](child)(y)).toInt
+                      }
+                    else
+                      (x:Rep[Record], y:Rep[Record]) => {
+                        (compileExpr[Long](child)(y) - compileExpr[Long](child)(x)).toInt
+                      }
                   case DateType =>
-                    (x:Rep[Record], y:Rep[Record]) => {
-                      compareDate(order, compileExpr[Date](child)(x), compileExpr[Date](child)(y))
-                    }
+                    if (order == Ascending)
+                      (x:Rep[Record], y:Rep[Record]) => {
+                        (date_value(compileExpr[Date](child)(x)) - date_value(compileExpr[Date](child)(y))).toInt
+                      }
+                    else
+                      (x:Rep[Record], y:Rep[Record]) => {
+                        (date_value(compileExpr[Date](child)(y)) - date_value(compileExpr[Date](child)(x))).toInt
+                      }
                   case StringType =>
-                    (x:Rep[Record], y:Rep[Record]) => {
-                      compareString(order, compileExpr[String](child)(x), compileExpr[String](child)(y))
-                    }
+                    if (order == Ascending)
+                      (x:Rep[Record], y:Rep[Record]) => {
+                        (compileExpr[String](child)(x).fcharAt(0) - compileExpr[String](child)(y).fcharAt(0)).toInt
+                      }
+                    else
+                      (x:Rep[Record], y:Rep[Record]) => {
+                        (compileExpr[String](child)(y).fcharAt(0) - compileExpr[String](child)(x).fcharAt(0)).toInt
+                      }
                 }
               case _ => throw new RuntimeException("Sorting Expression " + p.getClass + " not supported")
             }
