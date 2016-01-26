@@ -2,6 +2,8 @@ name := "delite-playground"
 
 version := "0.1"
 
+resolvers += Resolver.mavenLocal
+
 scalaVersion := "2.11.2"
 
 scalaOrganization := "org.scala-lang.virtualized"

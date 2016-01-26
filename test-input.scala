@@ -101,7 +101,8 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 
 val lgr = "org.apache.spark.sql.execution.datasources.LogicalRelation"
-val aggexp= "org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression"
+val aggexp = "org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression"
+val expcl = "org.apache.spark.sql.catalyst.plans.logical.Expand"
 
 import optiql.compiler._
 import optiql.library._
@@ -173,34 +174,45 @@ def runDelite(d: DataFrame): Any = {
                 tpe)
     }
 
-    def compileAggExpr[T:Manifest](d: AggregateFunction)(rec: Rep[_]): Rep[T] = d match {
+    def compileAggExpr[T:Manifest](d: AggregateFunction)(rec: Rep[Table[Record]]): Rep[T] = d match {
       case Sum(child) =>
         val res = child.dataType match {
           case FloatType  =>
-            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Float](child)(l))
+            rec.Sum(l => compileExpr[Float](child)(l))
           case DoubleType  =>
-            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Double](child)(l))
+            rec.Sum(l => compileExpr[Double](child)(l))
           case IntegerType =>
-            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Int](child)(l))
+            rec.Sum(l => compileExpr[Int](child)(l))
           case LongType =>
-            rec.asInstanceOf[Rep[Table[Record]]].Sum(l => compileExpr[Long](child)(l))
+            rec.Sum(l => compileExpr[Long](child)(l))
         }
         res.asInstanceOf[Rep[T]]
       case Average(child) =>
         val res = child.dataType match {
           case FloatType  =>
-            rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Float](child)(l))
+            rec.Average(l => compileExpr[Float](child)(l))
           case DoubleType  =>
-            rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Double](child)(l))
+            rec.Average(l => compileExpr[Double](child)(l))
           //case IntegerType =>
-          //  rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Fractional[Int]](child)(l))
+          //  rec.Average(l => compileExpr[Fractional[Int]](child)(l))
           //case LongType =>
-          //  rec.asInstanceOf[Rep[Table[Record]]].Average(l => compileExpr[Fractional[Long]](child)(l))
+          //  rec.Average(l => compileExpr[Fractional[Long]](child)(l))
           case _ => throw new RuntimeException("Average, " + child.dataType)
         }
         res.asInstanceOf[Rep[T]]
       case Count(child) =>
-        val res = rec.asInstanceOf[Rep[Table[Record]]].Sum(l => unit[Long](1))
+        val res = rec.Sum(l => compileExpr[Long](child.head)(l))
+        res.asInstanceOf[Rep[T]]
+      case Min(child) =>
+        val res = child.dataType match {
+          case IntegerType  => rec.Min(l => compileExpr[Int](child)(l))
+          case LongType     => rec.Min(l => compileExpr[Long](child)(l))
+          case FloatType    => rec.Min(l => compileExpr[Float](child)(l))
+          case DoubleType   => rec.Min(l => compileExpr[Double](child)(l))
+          //case DateType     => rec.Min(l => compileExpr[Date](child)(l))
+          case StringType   => rec.Min(l => compileExpr[String](child)(l))
+          case _ => throw new RuntimeException("Min: TODO " + child.dataType)
+        }
         res.asInstanceOf[Rep[T]]
       case _ => throw new RuntimeException("TODO: AggregateExpression, " + d.getClass.getName)
     }
@@ -216,6 +228,10 @@ def runDelite(d: DataFrame): Any = {
         unit[T](value.asInstanceOf[T])
       case And(left, right) =>
         infix_&&(compileExpr[Boolean](left)(rec), compileExpr[Boolean](right)(rec)).asInstanceOf[Rep[T]]
+      case Or(left, right) =>
+        infix_||(compileExpr[Boolean](left)(rec), compileExpr[Boolean](right)(rec)).asInstanceOf[Rep[T]]
+      case Not(value) =>
+        (!compileExpr[Boolean](value)(rec)).asInstanceOf[Rep[T]]
       case LessThan(a,b) =>
         val bo = a.dataType match {
           case FloatType    => compileExpr[Float](a)(rec) < compileExpr[Float](b)(rec)
@@ -267,7 +283,10 @@ def runDelite(d: DataFrame): Any = {
         }
         bo.asInstanceOf[Rep[T]]
       case Alias(child, name) =>
-        compileExpr[T](child)(rec)
+        System.out.println("Alias " + name)
+        val res = compileExpr[T](child)(rec)
+        System.out.println(res)
+        res
       case Cast(child, dataType) =>
         compileExpr[T](child)(rec)
     //  case AggregateExpression(func, mode, isDistinct) =>
@@ -309,16 +328,22 @@ def runDelite(d: DataFrame): Any = {
         }
         res.asInstanceOf[Rep[T]]
       case Divide(left, right) =>
+        System.out.println(left.dataType + " : " + right.dataType)
         val res = left.dataType match {
           case FloatType  =>
             compileExpr[Float](left)(rec) / compileExpr[Float](right)(rec)
           case DoubleType  =>
-            compileExpr[Double](left)(rec) / compileExpr[Double](right)(rec)
+            System.out.println(">>> AAA")
+            val ll = compileExpr[Double](left)(rec)
+            System.out.println(">>> BBB")
+            val rr = compileExpr[Double](right)(rec)
+            ll / rr
           case IntegerType =>
             compileExpr[Int](left)(rec) / compileExpr[Int](right)(rec)
           case LongType =>
             compileExpr[Long](left)(rec) / compileExpr[Long](right)(rec)
         }
+        System.out.println(">>> CCC " + res.toString)
         res.asInstanceOf[Rep[T]]
       case CaseWhen(branches) =>
         def aux_t (list:Seq[Expression]): List[(Expression, Expression)] = list match {
@@ -344,17 +369,44 @@ def runDelite(d: DataFrame): Any = {
         compileExpr[String](str)(rec).startsWith(compileExpr[String](suff)(rec)).asInstanceOf[Rep[T]]
       case Contains(str, suff) =>
         compileExpr[String](str)(rec).contains(compileExpr[String](suff)(rec)).asInstanceOf[Rep[T]]
+      case Like(left, right) =>
+        System.out.println("left " + left.toString)
+        System.out.println("left " + left.getClass.getName)
+        System.out.println("right " + right.toString)
+        System.out.println("right " + right.getClass.getName)
+
+        // Hack
+        val token = right match {
+          case Literal(value, StringType) => value.toString.split('%')
+          case _ => throw new RuntimeException("Like: shouldn't happen")
+        }
+
+        val default = unit[Boolean](true).asInstanceOf[Rep[Boolean]]
+        val value = compileExpr[String](left)(rec)
+        def like_t() : Rep[Boolean] = {
+          token.foldLeft (default) {
+            case (lhs, p) => infix_&&(lhs, fstring_contains(value, unit[String](p)))
+          }
+        }
+        like_t().asInstanceOf[Rep[T]]
       case Year(exp) =>
         primitive_forge_int_shift_right_unsigned(date_value(compileExpr[Date](exp)(rec)), unit[Int](9)).asInstanceOf[Rep[T]]
-
+      case In (value, list) =>
+        val default = unit[Boolean](false).asInstanceOf[Rep[Boolean]]
+        def in_t() : Rep[Boolean] = {
+          list.foldRight (default) {
+            case (p, rhs) => infix_||(compileExpr[Boolean](EqualTo(p, value))(rec), rhs)
+          }
+        }
+        in_t().asInstanceOf[Rep[T]]
       case a : Expression if a.getClass.getName == aggexp =>
-        System.out.println("Here")
         // class AggregateExpression is private, so we use reflection
         // to get around access control
         val fld = a.getClass.getDeclaredFields.filter(_.getName == "aggregateFunction").head
         fld.setAccessible(true)
         val children = fld.get(a).asInstanceOf[AggregateFunction]
-        compileAggExpr[T](children)(rec)
+        System.out.println("AggregateFunction: " + children.getClass.getName)
+        compileAggExpr[T](children)(rec.asInstanceOf[Rep[Table[Record]]])
       case _ =>
         throw new RuntimeException("compileExpr, TODO: " + d.getClass.getName)
     }
@@ -508,6 +560,7 @@ def runDelite(d: DataFrame): Any = {
                   groupingExpr.map { (p:Expression) =>
                       convertType(p).asInstanceOf[Manifest[_]]}.toList).asInstanceOf[Manifest[Any]]
 
+          System.out.println("A")
           val group = table_groupby(
             res,
             {(rec:Rep[Record]) =>
@@ -521,31 +574,31 @@ def runDelite(d: DataFrame): Any = {
             }
           )(mfa, mfk, pos)
 
+          System.out.println("B")
 
           val mfg = extractMF(group)
-          table_select(
+          val tmp = table_select(
               group,
               { (coup:Rep[Tup2[Any, Table[Record]]]) =>
-                System.out.println("A")
                 val key = tup2__1(coup)(mfk, pos)
                 val tab = tup2__2(coup)(res.tp.asInstanceOf[Manifest[Table[Record]]],pos)
-                System.out.println("B")
-                System.out.println(extractMF(tab))
-                record_new[Record](aggregateExpr.map {
+                val tmp = record_new[Record](aggregateExpr.map {
                   (p:NamedExpression) =>
-                  System.out.println(p.getClass.getName)
-                  val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                  System.out.println(mfp)
-                  val tmp = p match {
-                    case AttributeReference(_, _, _, _) =>
-                      (getName(p), false, {(x:Any) => compileExpr[Any](p)(key)(mfp)})
-                    case _ =>
-                      (getName(p), false, {(x:Any) => compileExpr[Any](p)(tab)(mfp)})
-                  }
-                  tmp
+                    val mfp = convertType(p).asInstanceOf[Manifest[Any]]
+                    System.out.println("<<< " + p.getClass.getName)
+                    p match {
+                      case AttributeReference(_, _, _, _) =>
+                        (getName(p), false, {(x:Any) => compileExpr[Any](p)(key)(mfp)})
+                      case _ =>
+                        (getName(p), false, {(x:Any) => compileExpr[Any](p)(tab)(mfp)})
+                    }
                 })(mfo)
+                System.out.println("C " + tmp.toString)
+                tmp
               }
              )(mfg, mfo, pos)
+          System.out.println("D")
+          tmp
         }
 
       case Project(projectList, child) =>
@@ -580,6 +633,10 @@ def runDelite(d: DataFrame): Any = {
         table_where(res, { (rec:Rep[Record]) =>
           compileExpr[Boolean](condition)(rec)
         })(mf, implicitly[SourceContext])
+      case Limit(value, child) =>
+        val res = compile(child)
+        System.out.println("Value: " + value)
+        res
       case a: LeafNode if a.getClass.getName == lgr =>
         // class LogicalRelation is private, so we use reflection
         // to get around access control
@@ -632,6 +689,21 @@ def runDelite(d: DataFrame): Any = {
             table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
           case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
         }
+      case a if a.getClass.getName == expcl =>
+        val flp = a.getClass.getDeclaredFields.filter(_.getName == "projections").head
+        flp.setAccessible(true)
+        val projections = flp.get(a).asInstanceOf[Seq[Seq[Expression]]]
+        val flo = a.getClass.getDeclaredFields.filter(_.getName == "output").head
+        flo.setAccessible(true)
+        val output = flo.get(a).asInstanceOf[Seq[Seq[Expression]]]
+        val flc = a.getClass.getDeclaredFields.filter(_.getName == "child").head
+        flc.setAccessible(true)
+        val child = flc.get(a).asInstanceOf[LogicalPlan]
+        System.out.println("Expand")
+        System.out.println(projections)
+        System.out.println(output)
+        System.out.println(child)
+        compile(child)
       case _ => throw new RuntimeException("unknown query operator: " + d.getClass)
     }
 
@@ -784,13 +856,57 @@ val tpch2 =
     |     and s_suppkey = ps_suppkey
     |     and s_nationkey = n_nationkey
     |     and n_regionkey = r_regionkey
-    |     and r_name = 'EUROPE'" +
+    |     and r_name = 'EUROPE'
     |   )
     |order by
     | s_acctbal desc,
     | n_name,
     | s_name,
     | p_partkey""".stripMargin
+
+val tpch2nosub =
+  """select
+    |        s_acctbal,
+    |        s_name,
+    |        n_name,
+    |        p_partkey,
+    |        p_mfgr,
+    |        s_address,
+    |        s_phone,
+    |        s_comment
+    |from
+    |        part,
+    |        supplier,
+    |        partsupp,
+    |        nation,
+    |        region,
+    |        (select ps_partkey as t_ps_partkey, min(ps_supplycost) as t_min_ps_supplycost
+    |        from part, partsupp, supplier, nation, region
+    |        where p_partkey = ps_partkey
+    |              and s_suppkey = ps_suppkey
+    |              and s_nationkey = n_nationkey
+    |              and n_regionkey = r_regionkey
+    |              and r_name = 'EUROPE'
+    |              and p_size = 15
+    |              and p_type like '%BRASS'
+    |        group by ps_partkey
+    |        ) as T
+    |where
+    |        p_partkey = ps_partkey
+    |        and s_suppkey = ps_suppkey
+    |        and p_size = 15
+    |        and p_type like '%BRASS'
+    |        and s_nationkey = n_nationkey
+    |        and n_regionkey = r_regionkey
+    |        and r_name = 'EUROPE'
+    |        and p_partkey = t_ps_partkey
+    |        and ps_supplycost = t_min_ps_supplycost
+    |order by
+    |        s_acctbal desc,
+    |        n_name,
+    |        s_name,
+    |        p_partkey
+    |limit 100""".stripMargin
 
 // TPCH - 3
 val tpch3 =
@@ -825,17 +941,38 @@ val tpch4 =
       |from
       | orders
       |where
-      | o_orderdate >= to_date('1993-07-01')
-      | and o_orderdate < to_date('1993-10-01')
-      | and exists (
+      | exists (
       |   select
       |     *
       |   from
       |     lineitem
       |   where
-      |     l_orderkey = o_orderkey
-      |     and l_commitdate < l_receiptdate
-      |   )
+      |     lineitem.l_orderkey = orders.o_orderkey
+      |     and lineitem.l_commitdate < lineitem.l_receiptdate
+      | )
+      |group by
+      | o_orderpriority
+      |order by
+      | o_orderpriority""".stripMargin
+
+val tpch4nosub1 =
+    """select
+      | o_orderpriority,
+      | count(*) as order_count
+      |from
+      | orders join (
+      |   select
+      |     distinct l_orderkey
+      |   from
+      |     lineitem
+      |   where
+      |     lineitem.l_commitdate < lineitem.l_receiptdate
+      | ) as L
+      |on
+      | L.l_orderkey = o_orderkey
+      |where
+      | o_orderdate >= to_date('1993-07-01')
+      | and o_orderdate < to_date('1993-10-01')
       |group by
       | o_orderpriority
       |order by
@@ -845,7 +982,7 @@ val tpch4 =
 val tpch5 =
   """select
     | n_name,
-    | sum(l_extendedprice * (1 - l_discount)) as revenue
+    | sum(l_extendedprice * (1 - l_discount)) / sum(l_discount) as revenue
     |from
     | customer,
     | orders,
@@ -856,10 +993,10 @@ val tpch5 =
     |where
     | c_custkey = o_custkey
     | and l_orderkey = o_orderkey
-    | and l_suppkey = s_suppkey
     | and c_nationkey = s_nationkey
     | and s_nationkey = n_nationkey
     | and n_regionkey = r_regionkey
+    | and l_suppkey = s_suppkey
     | and r_name = 'ASIA'
     | and o_orderdate >= to_date('1994-01-01')
     | and o_orderdate < to_date('1995-01-01')
@@ -886,7 +1023,8 @@ val tpch7 =
   """select
     | supp_nation,
     | cust_nation,
-    | l_year, sum(volume) as revenue
+    | l_year,
+    | sum(volume) as revenue
     |from (
     | select
     |   n1.n_name as supp_nation,
@@ -921,15 +1059,43 @@ val tpch7 =
     | cust_nation,
     | l_year""".stripMargin
 
+val tpchtest =
+  """
+    |select
+    | year(o_orderdate) as o_year,
+    | l_extendedprice * (1-l_discount) as volume,
+    | n2.n_name as nation
+    |from
+    | part,
+    | supplier,
+    | lineitem,
+    | orders,
+    | customer,
+    | nation n1,
+    | nation n2,
+    | region
+    |where
+    | p_partkey = l_partkey
+    | and s_suppkey = l_suppkey
+    | and l_orderkey = o_orderkey
+    | and o_custkey = c_custkey
+    | and c_nationkey = n1.n_nationkey
+    | and n1.n_regionkey = r_regionkey
+    | and r_name = 'AMERICA'
+    | and s_nationkey = n2.n_nationkey
+    | and o_orderdate between to_date('1995-01-01') and to_date('1996-12-31')
+    | and p_type = 'ECONOMY ANODIZED STEEL'""".stripMargin
+
 // TPCH - 8
 val tpch8 =
   """select
     | o_year,
     | sum(case
-    |   when nation = 'BRAZIL'
+    |   when all_nations.nation = 'BRAZIL'
     |   then volume
-    | else 0
-    | end) / sum(volume) as mkt_share
+    |   else 0
+    | end) as mkt_share,
+    | avg(volume) + sum(volume)
     |from (
     | select
     |   year(o_orderdate) as o_year,
@@ -1029,6 +1195,85 @@ val tpch10 =
     |order by
     | revenue desc""".stripMargin
 
+val tpch11 =
+  """select
+    | ps_partkey,
+    | sum(ps_supplycost * ps_availqty) as value
+    | from
+    | partsupp,
+    | supplier,
+    | nation
+    |where
+    | ps_suppkey = s_suppkey
+    | and s_nationkey = n_nationkey
+    | and n_name = 'GERMANY'
+    |group by
+    | ps_partkey having
+    | sum(ps_supplycost * ps_availqty) > (
+    |   select
+    |     sum(ps_supplycost * ps_availqty) * 0.0001
+    |   from
+    |     partsupp,
+    |     supplier,
+    |     nation
+    |   where
+    |     ps_suppkey = s_suppkey
+    |     and s_nationkey = n_nationkey
+    |     and n_name = 'GERMANY'
+    |   )
+    |order by
+    | value desc""".stripMargin
+
+val tpch12 =
+  """select
+    | l_shipmode,
+    | sum(case
+    |   when o_orderpriority ='1-URGENT'
+    |   or o_orderpriority ='2-HIGH'
+    |   then 1
+    | else 0
+    | end) as high_line_count,
+    | sum(case
+    |   when o_orderpriority <> '1-URGENT'
+    |   and o_orderpriority <> '2-HIGH'
+    |   then 1
+    | else 0
+    | end) as low_line_count
+    |from
+    | orders,
+    | lineitem
+    |where
+    | o_orderkey = l_orderkey
+    | and l_shipmode in ('MAIL', 'SHIP')
+    | and l_commitdate < l_receiptdate
+    | and l_shipdate < l_commitdate
+    | and l_receiptdate >= to_date('1994-01-01')
+    | and l_receiptdate < to_date('1995-01-01')
+    |group by
+    | l_shipmode
+    |order by
+    | l_shipmode""".stripMargin
+
+val tpch13 =
+  """select
+    | c_count, count(*) as custdist
+    |from (
+    |   select
+    |     c_custkey,
+    |     count(o_orderkey)
+    |   from
+    |     customer left outer join orders on
+    |     c_custkey = o_custkey
+    |     and o_comment not like '%special%requests%'
+    |   group by
+    |     c_custkey
+    |   ) as c_orders (c_custkey, c_count)
+    |group by
+    | c_count
+    |order by
+    | custdist desc,
+    | c_count desc""".stripMargin
+
 val tpch14 =
   """select
     | 100.00 * sum(case
@@ -1044,14 +1289,464 @@ val tpch14 =
     | and l_shipdate >= to_date('1995-09-01')
     | and l_shipdate < to_date('1995-10-02')""".stripMargin
 
+val tpch15 =
+  """with revenue as (
+    | select
+    |   l_suppkey as supplier_no,
+    |   sum(l_extendedprice * (1 - l_discount)) as total_revenue
+    | from
+    |   lineitem
+    | where
+    |   l_shipdate >= to_date('1996-01-01')
+    |   and l_shipdate < to_date('1996-04-01')
+    | group by
+    |   l_suppkey
+    |)
+    |select
+    | s_suppkey,
+    | s_name,
+    | s_address,
+    | s_phone,
+    | total_revenue
+    |from
+    | supplier,
+    | revenue
+    |where
+    | s_suppkey = supplier_no
+    | and total_revenue = (
+    |  select
+    |   max(total_revenue)
+    |  from
+    |   revenue
+    | )
+    |order by
+    | s_suppkey""".stripMargin
+
+val tpch15nosub =
+  """with revenue as (
+    |    select
+    |        l_suppkey as supplier_no,
+    |        sum(l_extendedprice * (1 - l_discount)) as total_revenue
+    |    from
+    |        lineitem
+    |    where
+    |        l_shipdate >= to_date('1996-01-01')
+    |        and l_shipdate < to_date('1996-04-01')
+    |    group by
+    |        l_suppkey)
+    |select
+    |    s_suppkey,
+    |    s_name,
+    |    s_address,
+    |    s_phone,
+    |    total_revenue
+    |from
+    |    supplier,
+    |    revenue,
+    |     (
+    |        select
+    |            max(total_revenue) as total_rev
+    |        from
+    |            revenue
+    |    )as T
+    |where
+    |    s_suppkey = supplier_no
+    |    and total_revenue = T.total_rev
+    |order by
+    |    s_suppkey""".stripMargin
+
+val tpch16 =
+  """select
+    | p_brand,
+    | p_type,
+    | p_size,
+    | count(distinct ps_suppkey) as supplier_cnt
+    |from
+    | partsupp,
+    | part
+    |where
+    | p_partkey = ps_partkey
+    | and p_brand <> 'Brand#45'
+    | and p_type not like 'MEDIUM POLISHED%'
+    | and p_size in (42, 14, 23, 45, 19, 3, 36, 9)
+    | and ps_suppkey not in (
+    |   select
+    |   s_suppkey
+    |   from
+    |   supplier
+    |   where
+    |   s_comment like '%Customer%Complaints%'
+    | )
+    |group by
+    | p_brand,
+    | p_type,
+    | p_size
+    |order by
+    | supplier_cnt desc,
+    | p_brand,
+    | p_type,
+    | p_size""".stripMargin
+
+val tpch16nosub =
+  """select
+    | p_brand,
+    | p_type,
+    | p_size,
+    | count(distinct ps_suppkey) as supplier_cnt
+    |from
+    | partsupp,
+    | part,
+    | supplier
+    |where
+    | p_partkey = ps_partkey
+    | and p_brand <> 'Brand#45'
+    | and p_type not like 'MEDIUM POLISHED%'
+    | and p_size in (49, 14, 23, 45, 19, 3, 36, 9)
+    | and ps_suppkey = s_suppkey
+    | and s_comment not like '%Customer%Complaints%'
+    |group by
+    | p_brand,
+    | p_type,
+    | p_size
+    |order by
+    | supplier_cnt desc,
+    | p_brand,
+    | p_type,
+    | p_size""".stripMargin
+
+val tpch17 =
+  """select
+    | sum(l_extendedprice) / 7.0 as avg_yearly
+    |from
+    | lineitem,
+    | part
+    |where
+    | p_partkey = l_partkey
+    | and p_brand = 'Brand#23'
+    | and p_container = 'MED BOX'
+    | and l_quantity < (
+    |   select
+    |     avg(0.2 * l_quantity)
+    |   from
+    |     lineitem
+    |   where
+    |     l_partkey = p_partkey
+    | )""".stripMargin
+
+val tpch17nosub =
+  """select
+    |        sum(l_extendedprice) / 7.0 as avg_yearly
+    |from
+    |        lineitem,
+    |        part,
+    |        (select l_partkey as t_l_partkey, 0.2 * avg(l_quantity) as avg_l_quantity
+    |         from lineitem
+    |         where l_partkey = p_partkey
+    |         group by l_partkey
+    |        ) as T
+    |where
+    |        p_partkey = l_partkey
+    |        and p_partkey = T.t_l_partkey
+    |        and p_brand = 'Brand#23'
+    |        and p_container = 'MED BOX'
+    |        and l_quantity < T.avg_l_quantity""".stripMargin
 
 
-def testSQL(s: String) = {
+val tpch18 =
+  """select
+    | c_name,
+    | c_custkey,
+    | o_orderkey,
+    | o_orderdate,
+    | o_totalprice,
+    | sum(l_quantity)
+    |from
+    | customer,
+    | orders,
+    | lineitem
+    |where
+    | o_orderkey in (
+    |   select
+    |     l_orderkey
+    |   from
+    |     lineitem
+    |   group by
+    |     l_orderkey having
+    |     sum(l_quantity) > 300
+    | )
+    | and c_custkey = o_custkey
+    | and o_orderkey = l_orderkey
+    |group by
+    | c_name,
+    | c_custkey,
+    | o_orderkey,
+    | o_orderdate,
+    | o_totalprice
+    |order by
+    | o_totalprice desc,
+    | o_orderdate""".stripMargin
+
+val tpch18nosub =
+  """select
+    | c_name,
+    | c_custkey,
+    | o_orderkey,
+    | o_orderdate,
+    | o_totalprice,
+    | sum(l_quantity)
+    |from
+    | customer,
+    | orders,
+    | lineitem
+    |where
+    | c_custkey = o_custkey
+    | and o_orderkey = l_orderkey
+    |group by
+    | c_name,
+    | c_custkey,
+    | o_orderkey,
+    | o_orderdate,
+    | o_totalprice
+    |having
+    | sum(l_quantity) > 300
+    |order by
+    | o_totalprice desc,
+    | o_orderdate
+    |limit 100""".stripMargin
+
+val tpch19 =
+  """select
+    | sum(l_extendedprice * (1 - l_discount) ) as revenue
+    |from
+    | lineitem,
+    |part
+    | where
+    | (
+    |   p_partkey = l_partkey
+    |   and p_brand = 'Brand#12'
+    |   and p_container in ( 'SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')
+    |   and l_quantity >= 1 and l_quantity <= 11
+    |   and p_size between 1 and 5
+    |   and l_shipmode in ('AIR', 'AIR REG')
+    |   and l_shipinstruct = 'DELIVER IN PERSON'
+    | )
+    | or
+    | (
+    |   p_partkey = l_partkey
+    |   and p_brand = 'Brand#23'
+    |   and p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')
+    |   and l_quantity >= 10 and l_quantity <= 20
+    |   and p_size between 1 and 10
+    |   and l_shipmode in ('AIR', 'AIR REG')
+    |   and l_shipinstruct = 'DELIVER IN PERSON'
+    | )
+    | or
+    | (
+    |   p_partkey = l_partkey
+    |   and p_brand = 'Brand#34'
+    |   and p_container in ( 'LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')
+    |   and l_quantity >= 20 and l_quantity <= 30
+    |   and p_size between 1 and 15
+    |   and l_shipmode in ('AIR', 'AIR REG')
+    |   and l_shipinstruct = 'DELIVER IN PERSON'
+    | )""".stripMargin
+
+val tpch20 =
+  """select
+    | s_name,
+    | s_address
+    |from
+    | supplier, nation
+    |where
+    | s_suppkey in (
+    |   select
+    |     ps_suppkey
+    |   from
+    |     partsupp
+    |   where
+    |     ps_partkey in (
+    |       select
+    |         p_partkey
+    |       from
+    |         part
+    |       where
+    |       p_name like 'forest%'
+    |     )
+    |     and ps_availqty > (
+    |       select
+    |         0.5 * sum(l_quantity)
+    |       from
+    |         lineitem
+    |       where
+    |         l_partkey = ps_partkey
+    |         and l_suppkey = ps_suppkey
+    |         and l_shipdate >= to_date('1994-01-01')
+    |         and l_shipdate < to_date('1995-01-01')
+    |     )
+    | )
+    | and s_nationkey = n_nationkey
+    | and n_name = 'CANADA'
+    |order by
+    | s_name""".stripMargin
+
+val tpch20nosub =
+  """select
+    |        s_name,
+    |        s_address
+    |from
+    |        supplier,
+    |        nation
+    |where
+    |        s_suppkey in (
+    |                select
+    |                        distinct ps_suppkey
+    |                from
+    |                        partsupp,(
+    |                                select  0.5 * sum(l_quantity) as sum_l_quantity
+    |                                from lineitem
+    |                                where l_partkey = ps_partkey
+    |                                      and l_suppkey = ps_suppkey
+    |                                      and l_shipdate >= date '1994-01-01'
+    |                                      and l_shipdate < date '1995-01-01'
+    |                        ) as T1,
+    |
+    |                          (
+    |                                select
+    |                                        p_partkey
+    |                                from
+    |                                        part
+    |                                where
+    |                                        p_name like 'forest%'
+    |                        ) as T2
+    |                where
+    |                        ps_partkey = T2.p_partkey
+    |                        and ps_availqty > T1.sum_l_quantity
+    |        )
+    |        and s_nationkey = n_nationkey
+    |        and n_name = 'CANADA'
+    |order by
+    |        s_name""".stripMargin
+
+
+val tpch21 =
+  """select
+    | s_name,
+    | count(*) as numwait
+    |from
+    | supplier,
+    | lineitem l1,
+    | orders,
+    | nation
+    |where
+    | s_suppkey = l1.l_suppkey
+    | and o_orderkey = l1.l_orderkey
+    | and o_orderstatus = 'F'
+    | and l1.l_receiptdate > l1.l_commitdate
+    | and exists (
+    |   select
+    |     *
+    |   from
+    |     lineitem l2
+    |   where
+    |     l2.l_orderkey = l1.l_orderkey
+    |     and l2.l_suppkey <> l1.l_suppkey
+    | )
+    | and not exists (
+    |   select
+    |     *
+    |   from
+    |     lineitem l3
+    |   where
+    |     l3.l_orderkey = l1.l_orderkey
+    |     and l3.l_suppkey <> l1.l_suppkey
+    |     and l3.l_receiptdate > l3.l_commitdate
+    | )
+    | and s_nationkey = n_nationkey
+    | and n_name = 'SAUDI ARABIA'
+    |group by
+    | s_name
+    |order by
+    | numwait desc,
+    | s_name""".stripMargin
+
+val tpch22 =
+  """select
+    | cntrycode,
+    | count(*) as numcust,
+    | sum(c_acctbal) as totacctbal
+    |from (
+    | select
+    |   substring(c_phone from 1 for 2) as cntrycode,
+    |   c_acctbal
+    | from
+    |   customer
+    | where
+    |   substring(c_phone from 1 for 2) in
+    |     ('13','31','23','29','30','18','17')
+    |   and c_acctbal > (
+    |     select
+    |       avg(c_acctbal)
+    |     from
+    |       customer
+    |     where
+    |       c_acctbal > 0.00
+    |     and substring (c_phone from 1 for 2) in
+    |       ('13','31','23','29','30','18','17')
+    |   )
+    |   and not exists (
+    |     select
+    |       *
+    |     from
+    |       orders
+    |     where
+    |     o_custkey = c_custkey
+    |   )
+    | ) as custsale
+    |group by
+    | cntrycode
+    |order by
+    | cntrycode""".stripMargin
+
+val tpch22nosub =
+  """select
+    |        cntrycode,
+    |        count(*) as numcust,
+    |        sum(c_acctbal) as totacctbal
+    |from
+    |     (
+    |          select
+    |              substring(c_phone, 1, 2) as cntrycode,
+    |            c_acctbal
+    |          from
+    |              customer left outer join orders on o_custkey = c_custkey ,
+    |              (
+    |              select avg(c_acctbal) as avg_c_acctbal
+    |              from customer
+    |              where
+    |                   c_acctbal > 0.00
+    |                    and substring(c_phone, 1, 2) in ('13', '31', '23', '29', '30', '18', '17')) as T
+    |          where
+    |                substring(c_phone, 1, 2) in ('13', '31', '23', '29', '30', '18', '17')
+    |          and o_custkey is NULL
+    |          and c_acctbal > T.avg_c_acctbal
+    |        ) as custsale
+    |group by
+    |        cntrycode
+    |order by
+    |        cntrycode""".stripMargin
+
+def testSpark(s: String) = {
+  val res = sqlContext.sql(s)
+
+  System.out.println(res.queryExecution.optimizedPlan)
+
+  res.show()
+}
+
+def testDelite(s: String) = {
   val res = sqlContext.sql(s)
 
   System.out.println(res.queryExecution.optimizedPlan)
 
   runDelite(res)
-
-  res.show()
 }
