@@ -389,6 +389,9 @@ def runDelite(d: DataFrame): Any = {
           }
         }
         like_t().asInstanceOf[Rep[T]]
+      case Substring(value, idx1, idx2) =>
+        compileExpr[String](value)(rec).substring(compileExpr[Int](idx1)(rec), compileExpr[Int](idx2)(rec)).asInstanceOf[Rep[T]]
+
       case Year(exp) =>
         primitive_forge_int_shift_right_unsigned(date_value(compileExpr[Date](exp)(rec)), unit[Int](9)).asInstanceOf[Rep[T]]
       case In (value, list) =>
@@ -399,6 +402,8 @@ def runDelite(d: DataFrame): Any = {
           }
         }
         in_t().asInstanceOf[Rep[T]]
+      case IsNull(value) =>
+        unit[Boolean](true).asInstanceOf[Rep[T]]
       case a : Expression if a.getClass.getName == aggexp =>
         // class AggregateExpression is private, so we use reflection
         // to get around access control
@@ -448,7 +453,7 @@ def runDelite(d: DataFrame): Any = {
         (lekey, rekey, mfk)
 
       case Some(value) => throw new RuntimeException("Join: unsupported operation " + value.getClass.getName)
-      case None =>
+      case None => // Cartersien product
         val key = (p: Rep[Record]) => { unit[Int](1) }
         val mfk = manifest[Int].asInstanceOf[Manifest[Any]]
         (key, key, mfk)
@@ -668,10 +673,10 @@ def runDelite(d: DataFrame): Any = {
 
         val mfl = extractMF(resl)
         val mfr = extractMF(resr)
-        val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
 
         tpe match {
           case Inner =>
+            val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
             val reskey =
               (l: Rep[Record], r: Rep[Record]) => {
                 record_new[Record](
@@ -687,6 +692,16 @@ def runDelite(d: DataFrame): Any = {
 
             val (lkey, rkey, mfk) = compileCond(cond, mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
             table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
+          case LeftOuter =>
+            val reskey =
+              (l: Rep[Record], r: Rep[Record]) => l
+            val (lkey, rkey, mfk) = compileCond(cond, mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
+            table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfl, implicitly[SourceContext])
+          case RightOuter =>
+            val reskey =
+              (l: Rep[Record], r: Rep[Record]) => r
+            val (lkey, rkey, mfk) = compileCond(cond, mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
+            table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfl, implicitly[SourceContext])
           case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
         }
       case a if a.getClass.getName == expcl =>
@@ -955,7 +970,7 @@ val tpch4 =
       |order by
       | o_orderpriority""".stripMargin
 
-val tpch4nosub1 =
+val tpch4nosub =
     """select
       | o_orderpriority,
       | count(*) as order_count
@@ -982,7 +997,7 @@ val tpch4nosub1 =
 val tpch5 =
   """select
     | n_name,
-    | sum(l_extendedprice * (1 - l_discount)) / sum(l_discount) as revenue
+    | sum(l_extendedprice * (1 - l_discount)) as revenue
     |from
     | customer,
     | orders,
@@ -1059,33 +1074,6 @@ val tpch7 =
     | cust_nation,
     | l_year""".stripMargin
 
-val tpchtest =
-  """
-    |select
-    | year(o_orderdate) as o_year,
-    | l_extendedprice * (1-l_discount) as volume,
-    | n2.n_name as nation
-    |from
-    | part,
-    | supplier,
-    | lineitem,
-    | orders,
-    | customer,
-    | nation n1,
-    | nation n2,
-    | region
-    |where
-    | p_partkey = l_partkey
-    | and s_suppkey = l_suppkey
-    | and l_orderkey = o_orderkey
-    | and o_custkey = c_custkey
-    | and c_nationkey = n1.n_nationkey
-    | and n1.n_regionkey = r_regionkey
-    | and r_name = 'AMERICA'
-    | and s_nationkey = n2.n_nationkey
-    | and o_orderdate between to_date('1995-01-01') and to_date('1996-12-31')
-    | and p_type = 'ECONOMY ANODIZED STEEL'""".stripMargin
-
 // TPCH - 8
 val tpch8 =
   """select
@@ -1094,8 +1082,7 @@ val tpch8 =
     |   when all_nations.nation = 'BRAZIL'
     |   then volume
     |   else 0
-    | end) as mkt_share,
-    | avg(volume) + sum(volume)
+    | end) / sum(volume) as mkt_share
     |from (
     | select
     |   year(o_orderdate) as o_year,
@@ -1221,6 +1208,36 @@ val tpch11 =
     |     and s_nationkey = n_nationkey
     |     and n_name = 'GERMANY'
     |   )
+    |order by
+    | value desc""".stripMargin
+
+val tpch11nosub =
+  """with c as (
+    |   select
+    |     sum(ps_supplycost * ps_availqty) * 0.0001 as cost
+    |   from
+    |     partsupp,
+    |     supplier,
+    |     nation
+    |   where
+    |     ps_suppkey = s_suppkey
+    |     and s_nationkey = n_nationkey
+    |     and n_name = 'GERMANY'
+    |)
+    |select
+    | ps_partkey,
+    | sum(ps_supplycost * ps_availqty) as value
+    | from
+    | partsupp,
+    | supplier,
+    | nation,
+    | c
+    |where
+    | ps_suppkey = s_suppkey
+    | and s_nationkey = n_nationkey
+    | and n_name = 'GERMANY'
+    |group by
+    | ps_partkey having value > cost
     |order by
     | value desc""".stripMargin
 
@@ -1591,37 +1608,37 @@ val tpch20 =
 
 val tpch20nosub =
   """select
-    |        s_name,
+    |        distinct s_name,
     |        s_address
     |from
     |        supplier,
-    |        nation
+    |        nation,
+    |        (select
+    |               distinct ps_suppkey
+    |         from
+    |               partsupp,
+    |               (select
+    |                   0.5 * sum(l_quantity) as sum_l_quantity
+    |               from
+    |                 lineitem
+    |               where l_partkey = ps_partkey
+    |                 and l_suppkey = ps_suppkey
+    |                 and l_shipdate >= to_date('1994-01-01')
+    |                 and l_shipdate < to_date('1995-01-01')
+    |               ) as T1,
+    |               (select
+    |                 p_partkey
+    |               from
+    |                 part
+    |               where
+    |                 p_name like 'forest%'
+    |               ) as T2
+    |        where
+    |                ps_partkey = T2.p_partkey
+    |                and ps_availqty > T1.sum_l_quantity
+    |        ) as T3
     |where
-    |        s_suppkey in (
-    |                select
-    |                        distinct ps_suppkey
-    |                from
-    |                        partsupp,(
-    |                                select  0.5 * sum(l_quantity) as sum_l_quantity
-    |                                from lineitem
-    |                                where l_partkey = ps_partkey
-    |                                      and l_suppkey = ps_suppkey
-    |                                      and l_shipdate >= date '1994-01-01'
-    |                                      and l_shipdate < date '1995-01-01'
-    |                        ) as T1,
-    |
-    |                          (
-    |                                select
-    |                                        p_partkey
-    |                                from
-    |                                        part
-    |                                where
-    |                                        p_name like 'forest%'
-    |                        ) as T2
-    |                where
-    |                        ps_partkey = T2.p_partkey
-    |                        and ps_availqty > T1.sum_l_quantity
-    |        )
+    |        s_suppkey = T3.ps_suppkey
     |        and s_nationkey = n_nationkey
     |        and n_name = 'CANADA'
     |order by
