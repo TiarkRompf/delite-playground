@@ -1186,7 +1186,7 @@ val tpch11 =
   """select
     | ps_partkey,
     | sum(ps_supplycost * ps_availqty) as value
-    | from
+    |from
     | partsupp,
     | supplier,
     | nation
@@ -1212,34 +1212,36 @@ val tpch11 =
     | value desc""".stripMargin
 
 val tpch11nosub =
-  """with c as (
-    |   select
-    |     sum(ps_supplycost * ps_availqty) * 0.0001 as cost
-    |   from
-    |     partsupp,
-    |     supplier,
-    |     nation
-    |   where
-    |     ps_suppkey = s_suppkey
-    |     and s_nationkey = n_nationkey
-    |     and n_name = 'GERMANY'
-    |)
+  """
     |select
-    | ps_partkey,
-    | sum(ps_supplycost * ps_availqty) as value
-    | from
-    | partsupp,
-    | supplier,
-    | nation,
-    | c
+    |        ps_partkey,
+    |        sum(ps_supplycost * ps_availqty) as value
+    |from
+    |        partsupp,
+    |        supplier,
+    |        nation,
+    |        (
+    |                        select
+    |                                sum(ps_supplycost * ps_availqty) * 0.0001 as V
+    |                        from
+    |                                partsupp,
+    |                                supplier,
+    |                                nation
+    |                        where
+    |                                ps_suppkey = s_suppkey
+    |                                and s_nationkey = n_nationkey
+    |                                and n_name = 'GERMANY'
+    |                ) as T1
     |where
-    | ps_suppkey = s_suppkey
-    | and s_nationkey = n_nationkey
-    | and n_name = 'GERMANY'
+    |        ps_suppkey = s_suppkey
+    |        and s_nationkey = n_nationkey
+    |        and n_name = 'GERMANY'
     |group by
-    | ps_partkey having value > cost
+    |        ps_partkey having
+    |                sum(ps_supplycost * ps_availqty) > max(V)
     |order by
-    | value desc""".stripMargin
+    |        value desc
+""".stripMargin
 
 val tpch12 =
   """select
@@ -1277,14 +1279,14 @@ val tpch13 =
     |from (
     |   select
     |     c_custkey,
-    |     count(o_orderkey)
+    |     count(o_orderkey) as c_count
     |   from
-    |     customer left outer join orders on
-    |     c_custkey = o_custkey
+    |     customer join orders on
+    |     o_custkey = c_custkey
     |     and o_comment not like '%special%requests%'
     |   group by
     |     c_custkey
-    |   ) as c_orders (c_custkey, c_count)
+    |   ) as c_orders
     |group by
     | c_count
     |order by
@@ -1388,11 +1390,11 @@ val tpch16 =
     | and p_size in (42, 14, 23, 45, 19, 3, 36, 9)
     | and ps_suppkey not in (
     |   select
-    |   s_suppkey
+    |     s_suppkey
     |   from
-    |   supplier
+    |     supplier
     |   where
-    |   s_comment like '%Customer%Complaints%'
+    |     s_comment like '%Customer%Complaints%'
     | )
     |group by
     | p_brand,
@@ -1457,7 +1459,7 @@ val tpch17nosub =
     |        lineitem,
     |        part,
     |        (select l_partkey as t_l_partkey, 0.2 * avg(l_quantity) as avg_l_quantity
-    |         from lineitem
+    |         from lineitem, part
     |         where l_partkey = p_partkey
     |         group by l_partkey
     |        ) as T
@@ -1613,37 +1615,42 @@ val tpch20nosub =
     |from
     |        supplier,
     |        nation,
-    |        (select
-    |               distinct ps_suppkey
-    |         from
-    |               partsupp,
-    |               (select
-    |                   0.5 * sum(l_quantity) as sum_l_quantity
-    |               from
-    |                 lineitem
-    |               where l_partkey = ps_partkey
-    |                 and l_suppkey = ps_suppkey
-    |                 and l_shipdate >= to_date('1994-01-01')
-    |                 and l_shipdate < to_date('1995-01-01')
-    |               ) as T1,
-    |               (select
-    |                 p_partkey
-    |               from
-    |                 part
-    |               where
-    |                 p_name like 'forest%'
-    |               ) as T2
-    |        where
-    |                ps_partkey = T2.p_partkey
-    |                and ps_availqty > T1.sum_l_quantity
-    |        ) as T3
+    |        (
+    |                select
+    |                        distinct PSupp.ps_suppkey
+    |                from
+    |                        partsupp as PSupp,(
+    |                                select ps_partkey, ps_suppkey, 0.5 * sum(l_quantity) as sum_l_quantity
+    |                                from lineitem, partsupp
+    |                                where l_partkey = ps_partkey
+    |                                      and l_suppkey = ps_suppkey
+    |                                      and l_shipdate >= to_date('1994-01-01')
+    |                                      and l_shipdate < to_date('1995-01-01')
+    |
+    |                          group by ps_partkey, ps_suppkey
+    |                        ) as T1,
+    |
+    |                                        (
+    |                                select
+    |                                        p_partkey
+    |                                from
+    |                                        part
+    |                                where
+    |                                        p_name like 'forest%'
+    |                        ) as T2
+    |                where
+    |                        PSupp.ps_partkey = T2.p_partkey
+    |                        and ps_availqty > T1.sum_l_quantity
+    |          and T1.ps_partkey = PSupp.ps_partkey
+    |          and T1.ps_suppkey = PSupp.ps_suppkey
+    |
+    |        )T3
     |where
     |        s_suppkey = T3.ps_suppkey
     |        and s_nationkey = n_nationkey
     |        and n_name = 'CANADA'
     |order by
     |        s_name""".stripMargin
-
 
 val tpch21 =
   """select
@@ -1685,6 +1692,36 @@ val tpch21 =
     |order by
     | numwait desc,
     | s_name""".stripMargin
+
+val tpch21nosub =
+  """select
+    |        s_name,
+    |        count(*) as numwait
+    |from
+    |        supplier,
+    |        lineitem l1 left outer join lineitem l3 on l3.l_orderkey = l1.l_orderkey
+    |                        and l3.l_suppkey <> l1.l_suppkey
+    |                        and l3.l_receiptdate > l3.l_commitdate,
+    |        orders,
+    |        nation,
+    |        (select distinct l2.l_orderkey from lineitem l2, lineitem l4 where l2.l_orderkey = l4.l_orderkey and l2.l_suppkey <> l4.l_suppkey) as T
+    |
+    |where
+    |        s_suppkey = l1.l_suppkey
+    |        and o_orderkey = l1.l_orderkey
+    |        and o_orderstatus = 'F'
+    |        and l1.l_receiptdate > l1.l_commitdate
+    |        and T.l_orderkey = l1.l_orderkey
+    |        and s_nationkey = n_nationkey
+    |        and n_name = 'SAUDI ARABIA'
+    |        and l3.l_orderkey is NULL
+    |        and T.l_orderkey = l1.l_orderkey
+    |group by
+    |        s_name
+    |order by
+    |        numwait desc,
+    |        s_name
+    |limit 100""".stripMargin
 
 val tpch22 =
   """select
