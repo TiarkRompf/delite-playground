@@ -624,7 +624,8 @@ object Run {
         System.out.println("Compiled")
 
         val mf = extractMF(res)
-        // infix_printAsTable(res)(mf, implicitly[SourceContext])
+        infix_printAsTable(res, 1)(mf, implicitly[SourceContext])
+        System.out.println("Done")
       }
     }
     DeliteRunner.compileAndTest(DeliteQuery)
