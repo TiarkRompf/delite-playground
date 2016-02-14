@@ -29,6 +29,8 @@ libraryDependencies += "stanford-ppl" %% "optiql" % "0.1-SNAPSHOT"
 
 libraryDependencies += "org.apache.spark" %% "spark-core" % "1.6.0"
 
+libraryDependencies += "org.apache.spark" %% "spark-sql" % "1.6.0"
+
 libraryDependencies += "com.databricks" %% "spark-csv" % "1.2.0"
 
 //libraryDependencies += "com.google.protobuf" % "protobuf-java" % "2.4.1"
