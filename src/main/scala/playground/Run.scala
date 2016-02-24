@@ -62,6 +62,136 @@ object Run {
 
   def runDelite(d : LogicalPlan) = {
     object DeliteQuery extends OptiQLApplicationCompiler with DeliteTestRunner {
+      // ### begin modified code for groupBy fusion from hyperdsl ###
+      private def hashReduce[A:Manifest,K:Manifest,T:Manifest,R:Manifest](resultSelector: Exp[T] => Exp[R], keySelector: Exp[A] => Exp[K]): Option[(Exp[A]=>Exp[R], (Exp[R],Exp[R])=>Exp[R], (Exp[R],Exp[Int])=>Exp[R])] = {
+        var failed: Boolean = false
+        val ctx = implicitly[SourceContext]
+        def rewriteMap(value: Exp[Any]): Exp[A]=>Exp[R] = (value match {
+          case Def(Field(Def(Field(s,"_1")),index)) => (a:Exp[A]) => field(keySelector(a),index)(value.tp,ctx)
+          case Def(Field(s,"_1")) => keySelector
+          case Def(Table_Sum(s, sumSelector)) => sumSelector
+          case Def(Table_Average(s, avgSelector)) => avgSelector
+          case Def(Table2_Count(s)) => (a:Exp[A]) => unit(1)
+          case Def(Table_Max(s, maxSelector)) => maxSelector
+          case Def(Table_Min(s, minSelector)) => minSelector
+          case Def(Internal_pack2(u,v)) => (a: Exp[A]) => 
+            pack(rewriteMap(u)(a), rewriteMap(v)(a))(mtype(u.tp),mtype(v.tp),ctx,implicitly)
+          // TODO: Spark/Delite
+          case Def(a) => Console.err.println("found unknown map: " + a.toString); failed = true; null
+          case _ => Console.err.println("found unknown map: " + value.toString); failed = true; null
+        }).asInstanceOf[Exp[A]=>Exp[R]]
+
+        def rewriteReduce[N](value: Exp[Any]): (Exp[N],Exp[N])=>Exp[N] = (value match {
+          case Def(Field(Def(Field(s,"_1")),index)) => (a:Exp[N],b:Exp[N]) => a
+          case Def(Field(s,"_1")) => (a:Exp[N],b:Exp[N]) => a
+          case Def(d@Table_Sum(_,_)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(d._numR),mtype(d._mR),ctx)
+          case Def(d@Table_Average(_,_)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(d._numR),mtype(d._mR),ctx)
+          case Def(d@Table2_Count(s)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(implicitly[Numeric[Int]]),mtype(manifest[Int]),ctx)
+          case Def(d@Table_Max(_,_)) => (a:Exp[N],b:Exp[N]) => ordering_max(a,b)(otype(d._ordR),mtype(d._mR),ctx)
+          case Def(d@Table_Min(_,_)) => (a:Exp[N],b:Exp[N]) => ordering_min(a,b)(otype(d._ordR),mtype(d._mR),ctx)
+          case Def(d@Internal_pack2(u,v)) => (a:Exp[Tup2[N,N]],b:Exp[Tup2[N,N]]) => 
+            pack(rewriteReduce(u)(tup2__1(a)(mtype(u.tp),ctx),tup2__1(b)(mtype(u.tp),ctx)), 
+                 rewriteReduce(v)(tup2__2(a)(mtype(b.tp),ctx),tup2__2(b)(mtype(v.tp),ctx)))(mtype(u.tp),mtype(v.tp),ctx,implicitly)
+          case Def(a) => Console.err.println("found unknown reduce: " + a.toString); failed = true; null
+          case _ => Console.err.println("found unknown reduce: " + value.toString); failed = true; null
+        }).asInstanceOf[(Exp[N],Exp[N])=>Exp[N]]
+
+        def rewriteAverage[N](value: Exp[Any]): (Exp[N],Exp[Int])=>Exp[N] = (value match {
+          case Def(d@Table_Average(_,_)) => (a:Exp[N],count:Exp[Int]) => fractional_div(a, count.asInstanceOf[Exp[N]])(mtype(d._mR),frtype(d._fracR),mtype(d._mR),ctx,implicitly[Rep[N]=>Rep[N]])
+          case _ => (a:Exp[N],count:Exp[N]) => a
+        }).asInstanceOf[(Exp[N],Exp[Int])=>Exp[N]]
+
+
+        val funcs = resultSelector(fresh[T]) match {
+          case Def(Struct(tag: StructTag[R], elems)) =>
+            val valueFunc = (a:Exp[A]) => struct[R](tag, elems map { case (key, value) => (key, rewriteMap(value)(a)) })
+            val reduceFunc = (a:Exp[R],b:Exp[R]) => struct[R](tag, elems map { case (key, value) => (key, rewriteReduce(value)(field(a,key)(value.tp,ctx), field(b,key)(value.tp,ctx))) })
+            val averageFunc = (a:Exp[R],count:Exp[Int]) => struct[R](tag, elems map { case (key, value) => (key, rewriteAverage(value)(field(a,key)(value.tp,ctx), count)) })
+            (valueFunc, reduceFunc, averageFunc)
+
+          case a => (rewriteMap(a), rewriteReduce[R](a), rewriteAverage[R](a))
+        }
+
+        if (failed) None else Some(funcs)
+      }
+
+      def table_selectA[A:Manifest,R:Manifest](self: Rep[Table[A]], resultSelector: (Rep[A]) => Rep[R])(implicit __pos: SourceContext): Exp[Table[R]] = self match {
+        //case Def(QueryableWhere(origS, predicate)) => //Where-Select fusion
+        //  QueryableSelectWhere(origS, resultSelector, predicate)
+        case Def(g@Table_GroupBy(origS: Exp[Table[a]], keySelector)) => hashReduce(resultSelector, keySelector)(g._mA,g._mK,manifest[A],manifest[R]) match {
+          case Some((valueFunc, reduceFunc, averageFunc)) =>
+            //Console.err.println("fused GroupBy-Select")
+            val hr = groupByReduce(origS, keySelector, valueFunc, reduceFunc, (e:Exp[a]) => unit(true))(g._mA,g._mK,manifest[R],implicitly[SourceContext])
+            val count = groupByReduce(origS, keySelector, (e:Exp[a]) => unit(1), (a:Exp[Int],b:Exp[Int])=>forge_int_plus(a,b), (e:Exp[a])=>unit(true))(g._mA,g._mK,manifest[Int],implicitly[SourceContext])
+            bulkDivide(hr, count, averageFunc)(manifest[R],implicitly[SourceContext])
+          case None =>
+            Console.err.println("WARNING: unable to fuse GroupBy-Select")
+            return super.table_select(self, resultSelector)
+        }
+        case Def(g@Table_GroupByWhere(origS: Exp[Table[a]], keySelector, cond)) => hashReduce(resultSelector, keySelector)(g._mA,g._mK,manifest[A],manifest[R]) match {
+          case Some((valueFunc, reduceFunc, averageFunc)) =>
+            //Console.err.println("fused GroupBy-Select")
+            val hr = groupByReduce(origS, keySelector, valueFunc, reduceFunc, cond)(g._mA,g._mK,manifest[R],implicitly[SourceContext])
+            val count = groupByReduce(origS, keySelector, (e:Exp[a]) => unit(1), (a:Exp[Int],b:Exp[Int])=>forge_int_plus(a,b), cond)(g._mA,g._mK,manifest[Int],implicitly[SourceContext])
+            bulkDivide(hr, count, averageFunc)(manifest[R],implicitly[SourceContext])
+          case None =>
+            Console.err.println("WARNING: unable to fuse GroupBy-Select")
+            return super.table_select(self, resultSelector)
+        }
+        case _ => super.table_select(self, resultSelector)
+      }
+
+    
+
+      override def table_select[A:Manifest,R:Manifest](self: Rep[Table[A]], resultSelector: (Rep[A]) => Rep[R])(implicit __pos: SourceContext): Exp[Table[R]] = {
+        def sel1(a: Rep[R]): Rep[R] = (a match {
+          // right now only a/b is supported. TODO: add a+b etc
+          case Def(Primitive_Forge_double_divide(a,b)) => 
+            val a1 = a/*rewriteMap(a)(e)*/.asInstanceOf[Exp[Double]] // should we recurse here?
+            val b1 = b/*rewriteMap(b)(e)*/.asInstanceOf[Exp[Double]]  
+            pack(a1,b1)
+          case Def(Struct(tag: StructTag[R], elems)) =>
+            struct[R](tag, elems map { case (key, value) => (key, sel1(value.asInstanceOf[Rep[R]])) })
+          case _ => a
+        }).asInstanceOf[Rep[R]]
+
+        def sel2(a: Rep[R])(v: Rep[R]): Rep[R] = (a match {
+          case Def(Primitive_Forge_double_divide(a,b)) => 
+            val v1 = v.asInstanceOf[Rep[Tup2[Double,Double]]]
+            val a1 = tup2__1(v1)/*sel2(a)(v._1)*/.asInstanceOf[Exp[Double]] // should we recurse here?
+            val b1 = tup2__2(v1)/*sel2(b)(v._2)*/.asInstanceOf[Exp[Double]]
+            primitive_forge_double_divide(a1,b1)
+          case Def(Struct(tag: StructTag[R], elems)) =>
+            struct[R](tag, elems map { case (key, value) => 
+              (key, sel2(value.asInstanceOf[Rep[R]])(field[R](v,key)(mtype(value.tp),__pos))) })
+          case _ => v
+        }).asInstanceOf[Rep[R]]
+
+        def tpe1(a: Rep[R]): Manifest[R] = (a match {
+          case Def(Primitive_Forge_double_divide(a,b)) => manifest[Tup2[Double,Double]]
+          case Def(Struct(tag: StructTag[R], elems)) =>
+            val em = elems map { case (key, value) => (key, tpe1(value.asInstanceOf[Rep[R]])) }
+            ManifestFactory.refinedType[Record](manifest[Record], em.map(_._1).toList, em.map(_._2).toList)
+          case _ => a.tp
+        }).asInstanceOf[Manifest[R]]
+
+        val isGroupBy = self match {
+          case Def(g@Table_GroupBy(origS: Exp[Table[a]], keySelector)) => true
+          case Def(g@Table_GroupByWhere(origS: Exp[Table[a]], keySelector, cond)) => true
+          case _ => false
+        }
+        if (isGroupBy) {
+          val rs = resultSelector(fresh[A])
+          val mfr = tpe1(rs)
+          val sel2func = sel2(rs) _
+
+          table_selectA(self, (x:Rep[A]) => sel1(resultSelector(x)))(manifest[A], mtype(mfr), __pos)
+               .Select(sel2func)
+        } else {
+          table_selectA(self,resultSelector)
+        }
+      }
+      // ### end groupBy fusion code ###
 
       def extractMF[T](x: Rep[Table[T]]): Manifest[T] = {
        //  println(x.tp.typeArguments)
