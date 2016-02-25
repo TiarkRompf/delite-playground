@@ -202,6 +202,15 @@ object Run {
       }
       // ### end groupBy fusion code ###
 
+      override def structName[T](m: Manifest[T]): String = m match {
+        case rm: RefinedManifest[_] => 
+          // order matters here!!
+          "Anon" + math.abs(rm.fields.map(f => f._1.## + f._2.toString.##).##)
+        case _ => super.structName(m)
+      }
+
+
+
       def extractMF[T](x: Rep[Table[T]]): Manifest[T] = {
        //  println(x.tp.typeArguments)
         x.tp.typeArguments.head.asInstanceOf[Manifest[T]]
