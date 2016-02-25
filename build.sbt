@@ -13,6 +13,7 @@ scalacOptions += "-Yvirtualize"
 // tests are not thread safe
 parallelExecution in Test := false
 
+
 libraryDependencies += "org.scala-lang.virtualized" % "scala-compiler" % "2.11.2"
 
 libraryDependencies += "jline" % "jline" % "2.11"
@@ -37,6 +38,8 @@ libraryDependencies += "com.databricks" %% "spark-csv" % "1.2.0"
 
 libraryDependencies += "com.google.guava" % "guava" % "14.0.1"
 
+// do not include repl scripts in assembly
+sourcesInBase := false
 
 mergeStrategy in assembly <<= (mergeStrategy in assembly) { (old) =>
   {
