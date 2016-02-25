@@ -203,7 +203,7 @@ object Run {
       def conv_date(days: Int): Rep[Date] = {
         val c = Calendar.getInstance();
         c.setTime(new java.util.Date(0)); // set origin 1970-01-01.
-        c.add(Calendar.DAY_OF_YEAR, days + 1); // Adding the number of days
+        c.add(Calendar.DAY_OF_YEAR, days); // Adding the number of days
         Date(primitive_forge_int_plus(primitive_forge_int_shift_left(c.get(Calendar.YEAR), unit(9)), primitive_forge_int_plus(primitive_forge_int_shift_left(c.get(Calendar.MONTH) + 1, unit(5)), c.get(Calendar.DATE))))
       }
 
