@@ -69,6 +69,7 @@ object Run {
         def rewriteMap(value: Exp[Any]): Exp[A]=>Exp[R] = (value match {
           case Def(Field(Def(Field(s,"_1")),index)) => (a:Exp[A]) => field(keySelector(a),index)(value.tp,ctx)
           case Def(Field(s,"_1")) => keySelector
+          case Def(Field(Def(Field(s,"_2")),index)) => (a:Exp[A]) => field(keySelector(a),index)(value.tp,ctx) // we know that it must be part of the selector ....
           case Def(Table_Sum(s, sumSelector)) => sumSelector
           case Def(Table_Average(s, avgSelector)) => avgSelector
           case Def(Table2_Count(s)) => (a:Exp[A]) => unit(1)
@@ -84,6 +85,7 @@ object Run {
         def rewriteReduce[N](value: Exp[Any]): (Exp[N],Exp[N])=>Exp[N] = (value match {
           case Def(Field(Def(Field(s,"_1")),index)) => (a:Exp[N],b:Exp[N]) => a
           case Def(Field(s,"_1")) => (a:Exp[N],b:Exp[N]) => a
+          case Def(Field(Def(Field(s,"_2")),index)) => (a:Exp[N],b:Exp[N]) => a
           case Def(d@Table_Sum(_,_)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(d._numR),mtype(d._mR),ctx)
           case Def(d@Table_Average(_,_)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(d._numR),mtype(d._mR),ctx)
           case Def(d@Table2_Count(s)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(implicitly[Numeric[Int]]),mtype(manifest[Int]),ctx)
@@ -150,6 +152,8 @@ object Run {
             val a1 = a/*rewriteMap(a)(e)*/.asInstanceOf[Exp[Double]] // should we recurse here?
             val b1 = b/*rewriteMap(b)(e)*/.asInstanceOf[Exp[Double]]  
             pack(a1,b1)
+          case Def(Primitive_Forge_double_times(Const(c),b)) => b // TODO: more general case
+          case Def(Ordering_Gt(a,b@Const(c))) => a
           case Def(Struct(tag: StructTag[R], elems)) =>
             struct[R](tag, elems map { case (key, value) => (key, sel1(value.asInstanceOf[Rep[R]])) })
           case _ => a
@@ -161,6 +165,9 @@ object Run {
             val a1 = tup2__1(v1)/*sel2(a)(v._1)*/.asInstanceOf[Exp[Double]] // should we recurse here?
             val b1 = tup2__2(v1)/*sel2(b)(v._2)*/.asInstanceOf[Exp[Double]]
             primitive_forge_double_divide(a1,b1)
+          case Def(Primitive_Forge_double_times(Const(c:Double),b)) => // TODO: handle more general case
+            primitive_forge_double_times(Const(c),v.asInstanceOf[Rep[Double]])
+          case Def(d@Ordering_Gt(a,b@Const(c))) => ordering_gt(v,b)(d._ordA,d._mA,__pos)
           case Def(Struct(tag: StructTag[R], elems)) =>
             struct[R](tag, elems map { case (key, value) => 
               (key, sel2(value.asInstanceOf[Rep[R]])(field[R](v,key)(mtype(value.tp),__pos))) })
@@ -169,6 +176,8 @@ object Run {
 
         def tpe1(a: Rep[R]): Manifest[R] = (a match {
           case Def(Primitive_Forge_double_divide(a,b)) => manifest[Tup2[Double,Double]]
+          case Def(Primitive_Forge_double_times(Const(c),b)) => b.tp
+          case Def(Ordering_Gt(a,b@Const(c))) => a.tp
           case Def(Struct(tag: StructTag[R], elems)) =>
             val em = elems map { case (key, value) => (key, tpe1(value.asInstanceOf[Rep[R]])) }
             ManifestFactory.refinedType[Record](manifest[Record], em.map(_._1).toList, em.map(_._2).toList)
@@ -473,6 +482,8 @@ object Run {
         case _ => true
       }
 
+      // TODO: for non-equijoin conditions (e.g. >), return a predicate that will be used as filter after the join
+      // TODO: for Or, generate a nested loop join
       def compileCond(cond: Option[Expression], mfl: RefinedManifest[Record], mfr: RefinedManifest[Record]) : (Rep[Record] => Rep[Any], Rep[Record] => Rep[Any], Manifest[Any]) = cond match {
         case Some(EqualTo(le, re)) =>
           val mfk = getType(cond).asInstanceOf[Manifest[Any]]
