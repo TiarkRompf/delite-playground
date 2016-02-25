@@ -91,7 +91,7 @@ object Run {
           case Def(d@Table_Min(_,_)) => (a:Exp[N],b:Exp[N]) => ordering_min(a,b)(otype(d._ordR),mtype(d._mR),ctx)
           case Def(d@Internal_pack2(u,v)) => (a:Exp[Tup2[N,N]],b:Exp[Tup2[N,N]]) => 
             pack(rewriteReduce(u)(tup2__1(a)(mtype(u.tp),ctx),tup2__1(b)(mtype(u.tp),ctx)), 
-                 rewriteReduce(v)(tup2__2(a)(mtype(b.tp),ctx),tup2__2(b)(mtype(v.tp),ctx)))(mtype(u.tp),mtype(v.tp),ctx,implicitly)
+                 rewriteReduce(v)(tup2__2(a)(mtype(v.tp),ctx),tup2__2(b)(mtype(v.tp),ctx)))(mtype(u.tp),mtype(v.tp),ctx,implicitly)
           case Def(a) => Console.err.println("found unknown reduce: " + a.toString); failed = true; null
           case _ => Console.err.println("found unknown reduce: " + value.toString); failed = true; null
         }).asInstanceOf[(Exp[N],Exp[N])=>Exp[N]]
