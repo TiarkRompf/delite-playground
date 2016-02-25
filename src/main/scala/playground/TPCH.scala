@@ -246,7 +246,7 @@ trait TPCHQ1Trait extends TPCHBaseTrait {
     val lineItems = loadLineItems()
     tic(lineItems.size)
 
-    val q = lineItems Where(_.l_shipdate <= Date("1998-12-01")) GroupBy(l => pack(l.l_returnflag,l.l_linestatus)) Select(g => new Record {
+    val q = lineItems Where(_.l_shipdate <= Date("1998-09-02")) GroupBy(l => pack(l.l_returnflag,l.l_linestatus)) Select(g => new Record {
       val returnFlag = g.key._1
       val lineStatus = g.key._2
       val sumQty = g.values.Sum(_.l_quantity)
