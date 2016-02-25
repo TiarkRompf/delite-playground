@@ -83,6 +83,8 @@ object TablePrinter {
 
     horizontalRule
     println(tableStr.toString)
+    if (numRows == maxRows)
+       println("(showing first " + maxRows + " rows)")
   }
 
   private def tableSize(table: AnyRef) = table.getClass.getMethod("size").invoke(table) match {
