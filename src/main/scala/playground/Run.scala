@@ -432,7 +432,7 @@ object Run {
         case StartsWith(str, pref) =>
           compileExpr[String](str)(rec).startsWith(compileExpr[String](pref)(rec)).asInstanceOf[Rep[T]]
         case EndsWith(str, suff) =>
-          compileExpr[String](str)(rec).startsWith(compileExpr[String](suff)(rec)).asInstanceOf[Rep[T]]
+          compileExpr[String](str)(rec).endsWith(compileExpr[String](suff)(rec)).asInstanceOf[Rep[T]]
         case Contains(str, suff) =>
           compileExpr[String](str)(rec).contains(compileExpr[String](suff)(rec)).asInstanceOf[Rep[T]]
         case Like(left, right) =>
