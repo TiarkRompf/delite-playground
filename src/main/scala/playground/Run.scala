@@ -517,7 +517,7 @@ object Run {
           (lekey, rekey, mfk)
 
         case Some(value) => throw new RuntimeException("Join: unsupported operation " + value.getClass.getName)
-        case None => // Cartersien product
+        case None => // Cartesian product
           val key = (p: Rep[Record]) => { unit[Int](1) }
           val mfk = manifest[Int].asInstanceOf[Manifest[Any]]
           (key, key, mfk)
