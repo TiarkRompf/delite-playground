@@ -452,7 +452,8 @@ object Run {
           }
           like_t().asInstanceOf[Rep[T]]
         case Substring(value, idx1, idx2) =>
-          compileExpr[String](value)(rec).substring(compileExpr[Int](idx1)(rec), compileExpr[Int](idx2)(rec)).asInstanceOf[Rep[T]]
+          val tmp = compileExpr[Int](idx1)(rec) - 1
+          fstring_substring(compileExpr[String](value)(rec), tmp, tmp + compileExpr[Int](idx2)(rec))(implicitly[SourceContext], new Overload2).asInstanceOf[Rep[T]]
 
         case Year(exp) =>
           primitive_forge_int_shift_right_unsigned(date_value(compileExpr[Date](exp)(rec)), unit[Int](9)).asInstanceOf[Rep[T]]
