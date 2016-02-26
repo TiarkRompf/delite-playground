@@ -60,7 +60,7 @@ object Run {
 
   def escapeDelim(c: Char) = if (c == '|') "\\|" else c.toString
 
-  def runDelite(d : LogicalPlan) = {
+  def runDelite(d : LogicalPlan, preloadData: Boolean) = {
     object DeliteQuery extends OptiQLApplicationCompiler with DeliteTestRunner {
       // ### begin modified code for groupBy fusion from hyperdsl ###
       private def hashReduce[A:Manifest,K:Manifest,T:Manifest,R:Manifest](resultSelector: Exp[T] => Exp[R], keySelector: Exp[A] => Exp[K]): Option[(Exp[A]=>Exp[R], (Exp[R],Exp[R])=>Exp[R], (Exp[R],Exp[Int])=>Exp[R])] = {
@@ -522,9 +522,9 @@ object Run {
           (key, key, mfk)
       }
 
-      def compile(d: LogicalPlan): Rep[Table[Record]] = d match {
+      def compile(d: LogicalPlan, inputs: Map[String,Rep[Table[Record]]]): Rep[Table[Record]] = d match {
         case Sort(sortingExpr, global, child) =>
-          val res = compile(child)
+          val res = compile(child, inputs)
           val mfa = extractMF(res)
           table_orderby(
             res,
@@ -592,7 +592,7 @@ object Run {
             }
           )(mfa, implicitly[SourceContext])
         case Aggregate(groupingExpr, aggregateExpr, child) =>
-          val res = compile(child)
+          val res = compile(child, inputs)
 
           if (aggregateExpr.length == 0)
             return res
@@ -661,7 +661,7 @@ object Run {
           }
 
         case Project(projectList, child) =>
-          val res = compile(child)
+          val res = compile(child, inputs)
 
           if (projectList.length == 0)
             return res
@@ -684,13 +684,13 @@ object Run {
             }
           )(mfb, mfa, implicitly[SourceContext])
         case Filter(condition, child) =>
-          val res = compile(child)
+          val res = compile(child, inputs)
           val mf = extractMF(res)
           table_where(res, { (rec:Rep[Record]) =>
             compileExpr[Boolean](condition)(rec)
           })(mf, implicitly[SourceContext])
         case Limit(value, child) =>
-          val res = compile(child)
+          val res = compile(child, inputs)
           res
         case a: LeafNode if a.getClass.getName == lgr =>
           // class LogicalRelation is private, so we use reflection
@@ -710,15 +710,15 @@ object Run {
               println("delimiter:")
               println(relation.delimiter)
                */
-              trait TYPE
-              implicit val mf: Manifest[TYPE] = convertDataType(relation.schema).asInstanceOf[Manifest[TYPE]]
-
-              Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]]
-
+              if (preloadData) inputs(relation.location) else {
+                trait TYPE
+                implicit val mf: Manifest[TYPE] = convertDataType(relation.schema).asInstanceOf[Manifest[TYPE]]
+                Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]]
+              }
           }
         case Join(left, right, tpe, cond) =>
-          val resl = compile(left)
-          val resr = compile(right)
+          val resl = compile(left, inputs)
+          val resr = compile(right, inputs)
 
           val mfl = extractMF(resl)
           val mfr = extractMF(resr)
@@ -763,15 +763,78 @@ object Run {
           val flc = a.getClass.getDeclaredFields.filter(_.getName == "child").head
           flc.setAccessible(true)
           val child = flc.get(a).asInstanceOf[LogicalPlan]
-          compile(child)
+          compile(child, inputs)
+        case _ => throw new RuntimeException("unknown query operator: " + d.getClass)
+      }
+
+      def preload(d: LogicalPlan): Map[String,Rep[Table[Record]]] = d match {
+        case Sort(sortingExpr, global, child) =>
+          preload(child)
+        case Aggregate(groupingExpr, aggregateExpr, child) =>
+          preload(child)
+        case Project(projectList, child) =>
+          preload(child)
+        case Filter(condition, child) =>
+          preload(child)
+        case Limit(value, child) =>
+          preload(child)
+        case a: LeafNode if a.getClass.getName == lgr =>
+          // class LogicalRelation is private, so we use reflection
+          // to get around access control
+          val fld = a.getClass.getDeclaredFields.filter(_.getName == "relation").head
+          fld.setAccessible(true)
+          val relation = fld.get(a).asInstanceOf[BaseRelation]
+          relation match {
+            case relation: CsvRelation =>
+              //println("schema:")
+              //println(relation.schema)
+              /*
+              println("got it: ")
+              println(relation)
+              println("location:")
+              println(relation.location)
+              println("delimiter:")
+              println(relation.delimiter)
+               */
+              trait TYPE
+              implicit val mf: Manifest[TYPE] = convertDataType(relation.schema).asInstanceOf[Manifest[TYPE]]
+              Map(relation.location -> Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]])
+          }
+        case Join(left, right, tpe, cond) =>
+          preload(left) ++ preload(right)
+        case a if a.getClass.getName == expcl =>
+          val flp = a.getClass.getDeclaredFields.filter(_.getName == "projections").head
+          flp.setAccessible(true)
+          val projections = flp.get(a).asInstanceOf[Seq[Seq[Expression]]]
+          val flo = a.getClass.getDeclaredFields.filter(_.getName == "output").head
+          flo.setAccessible(true)
+          val output = flo.get(a).asInstanceOf[Seq[Seq[Expression]]]
+          val flc = a.getClass.getDeclaredFields.filter(_.getName == "child").head
+          flc.setAccessible(true)
+          val child = flc.get(a).asInstanceOf[LogicalPlan]
+          preload(child)
         case _ => throw new RuntimeException("unknown query operator: " + d.getClass)
       }
 
       override def main() {
         println("TPC-H")
 
-        val res = compile(d)
+        var inputs: Map[String,Rep[Table[Record]]] = Map()
+
+        if (preloadData) {
+          tic("load")
+          inputs = preload(d)
+          toc("load", inputs.toSeq.map(_._2.size):_*)
+          println("preload: " + inputs.map(_._1).mkString(","))
+          tic("exec", inputs.toSeq.map(_._2.size):_*)
+        }
+
+        val res = compile(d, inputs)
         System.out.println("Compiled")
+
+        if (preloadData) {
+          toc("exec", res)
+        }
 
         val mf = extractMF(res)
         infix_printAsTable(res, 20)(mf, implicitly[SourceContext])

@@ -110,7 +110,7 @@ import playground._
 import java.util.{Date, Calendar}
 import java.text._
 
-def deliteSQL(s: String) = Run.runDelite(sqlContext.sql(s).queryExecution.optimizedPlan)
+def deliteSQL(s: String) = Run.runDelite(sqlContext.sql(s).queryExecution.optimizedPlan, false)
 
 // Tables
 val customer = (sqlContext.read
@@ -1173,10 +1173,10 @@ def testSpark(s: String) = {
   res.show()
 }
 
-def testDelite(s: String) = {
+def testDelite(s: String, preloadData: Boolean = false) = {
   val res = sqlContext.sql(s)
 
   System.out.println(res.queryExecution.optimizedPlan)
 
-  Run.runDelite(res.queryExecution.optimizedPlan)
+  Run.runDelite(res.queryExecution.optimizedPlan, preloadData)
 }
