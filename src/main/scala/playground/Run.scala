@@ -465,7 +465,8 @@ object Run {
           }
           in_t().asInstanceOf[Rep[T]]
         case IsNull(value) =>
-          unit[Boolean](true).asInstanceOf[Rep[T]]
+          // FIXME: IsNull
+          throw new RuntimeException("IsNull not supported")
         case a : Expression if a.getClass.getName == aggexp =>
           // class AggregateExpression is private, so we use reflection
           // to get around access control
