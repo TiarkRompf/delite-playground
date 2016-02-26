@@ -495,33 +495,129 @@ object Run {
 
       // TODO: for non-equijoin conditions (e.g. >), return a predicate that will be used as filter after the join
       // TODO: for Or, generate a nested loop join
-      def compileCond(cond: Option[Expression], mfl: RefinedManifest[Record], mfr: RefinedManifest[Record]) : (Rep[Record] => Rep[Any], Rep[Record] => Rep[Any], Manifest[Any]) = cond match {
+
+      // def compileUnsupported(cond: Expression, mfl: RefinedManifest[Record], mfr: RefinedManifest[Record]): (Rep[Record] => Rep[Any], Rep[Record] => Rep[Any], Manifest[Any]) = cond match {
+      //   case EqualTo(le, re) =>
+      //     val predicate = (p: Rep[Record]) => { compileExpr[Any](le)(p)(mfk) }
+      //   case And(le, re) =>
+      //   case Or(le ,re) =>
+
+      //   case Not(e) =>
+      //     throw new RuntimeException("Join: unsupported operation " + value.getClass.getName)
+
+      // }
+
+      sealed trait CondVal
+      case class EquiJoin(lkey: Rep[Record] => Rep[Any], rkey: Rep[Record] => Rep[Any], man: Manifest[Any]) extends CondVal
+      case class PredicateJoin(pred: (Rep[Record], Rep[Record]) => Rep[Boolean]) extends CondVal
+      case class MixedJoin(lkey: Rep[Record] => Rep[Any], rkey: Rep[Record] => Rep[Any], man: Manifest[Any], pred: (Rep[Record]) => Rep[Boolean]) extends CondVal
+
+      def compileCond(cond: Option[Expression], mfl: RefinedManifest[Record], mfr: RefinedManifest[Record], forcePred: Boolean = false): CondVal = cond match {
         case Some(EqualTo(le, re)) =>
           val mfk = getType(cond).asInstanceOf[Manifest[Any]]
           val lekey = (p: Rep[Record]) => { compileExpr[Any](le)(p)(mfk) }
           val rekey = (p: Rep[Record]) => { compileExpr[Any](re)(p)(mfk) }
           if (fieldInRecord(mfl, le) && fieldInRecord(mfr, re)) {
-            (lekey, rekey, mfk)
+            if (forcePred)
+              PredicateJoin((l: Rep[Record], r: Rep[Record]) => { lekey(l) == rekey(r) })
+            else
+              EquiJoin(lekey, rekey, mfk)
           } else if (fieldInRecord(mfl, re) && fieldInRecord(mfr, le)) {
-            (rekey, lekey, mfk)
+            if (forcePred)
+              PredicateJoin((l: Rep[Record], r: Rep[Record]) => { rekey(l) == lekey(r) })
+            else
+              EquiJoin(rekey, lekey, mfk)
           } else {
             throw new RuntimeException("Invalid syntax")
           }
         case Some(And(le, re)) =>
-          val (llekey, rlekey, lmfk) = compileCond(Some(le), mfl, mfr)
-          val (lrekey, rrekey, rmfk) = compileCond(Some(re), mfl, mfr)
-          val pos = implicitly[SourceContext]
+          (compileCond(Some(le), mfl, mfr, forcePred), compileCond(Some(re), mfl, mfr, forcePred)) match {
+            case (EquiJoin(llkey, lrkey, lmfk), EquiJoin(rlkey, rrkey, rmfk)) =>
+              val pos = implicitly[SourceContext]
 
-          val lekey = (p: Rep[Record]) => { tup2_pack((llekey(p), lrekey(p)))(lmfk, rmfk, pos, new Overload4()) }
-          val rekey = (p: Rep[Record]) => { tup2_pack((rlekey(p), rrekey(p)))(lmfk, rmfk, pos, new Overload4()) }
-          val mfk = m_Tup2(lmfk, rmfk).asInstanceOf[Manifest[Any]]
-          (lekey, rekey, mfk)
-
-        case Some(value) => throw new RuntimeException("Join: unsupported operation " + value.getClass.getName)
+              val lekey = (p: Rep[Record]) => { tup2_pack((llkey(p), lrkey(p)))(lmfk, rmfk, pos, new Overload4()) }
+              val rekey = (p: Rep[Record]) => { tup2_pack((rlkey(p), rrkey(p)))(lmfk, rmfk, pos, new Overload4()) }
+              val mfk = m_Tup2(lmfk, rmfk).asInstanceOf[Manifest[Any]]
+              EquiJoin(lekey, rekey, mfk)
+            case (EquiJoin(llkey, lrkey, lmfk), PredicateJoin(pred)) =>
+                MixedJoin(llkey, lrkey, lmfk, rec => pred(rec, rec))
+            case (PredicateJoin(pred), EquiJoin(rlkey, rrkey, rmfk)) =>
+              MixedJoin(rlkey, rrkey, rmfk, rec => pred(rec, rec))
+            case (PredicateJoin(lpred), PredicateJoin(rpred)) =>
+              PredicateJoin((l, r) => lpred(l, r) && rpred(l, r))
+            case (MixedJoin(lkey, rkey, mfk, pred1), PredicateJoin(pred2)) =>
+              MixedJoin(lkey, rkey, mfk, rec => pred1(rec) && pred2(rec, rec))
+          }
+        case Some(Or(le, re)) =>
+          val pred = (compileCond(Some(le), mfl, mfr, true), compileCond(Some(re), mfl, mfr, true)) match {
+            case (PredicateJoin(pred1), PredicateJoin(pred2)) =>
+              (l: Rep[Record], r: Rep[Record]) => { pred1(l, r) || pred2(l, r) }
+            case _ => throw new RuntimeException("ERROR: unsupported operation in Or")
+          }
+          PredicateJoin(pred)
+        case Some(In(value, list)) =>
+          val default = unit[Boolean](false).asInstanceOf[Rep[Boolean]]
+          val pred = (l: Rep[Record], r: Rep[Record]) =>  if (fieldInRecord(mfl, value)) {
+            list.foldRight (default) {
+              case (p, rhs) => infix_||(compileExpr[Boolean](EqualTo(p, value))(l), rhs)
+            }
+          } else {
+            list.foldRight (default) {
+              case (p, rhs) => infix_||(compileExpr[Boolean](EqualTo(p, value))(r), rhs)
+            }
+          }
+          PredicateJoin(pred)
+        case Some(GreaterThanOrEqual(lhs, rhs)) =>
+          val pred = (l: Rep[Record], r: Rep[Record]) => {
+            val ll = if (fieldInRecord(mfl, lhs)) l else r
+            val rr = if (fieldInRecord(mfl, rhs)) l else r
+            lhs.dataType match {
+              case FloatType    => compileExpr[Float](lhs)(ll) >= compileExpr[Float](rhs)(rr)
+              case DoubleType   => compileExpr[Double](lhs)(ll) >= compileExpr[Double](rhs)(rr)
+              case IntegerType  => compileExpr[Int](lhs)(ll) >= compileExpr[Int](rhs)(rr)
+              case LongType     => compileExpr[Long](lhs)(ll) >= compileExpr[Long](rhs)(rr)
+              case DateType     => compileExpr[Date](lhs)(ll) >= compileExpr[Date](rhs)(rr)
+              case StringType   => compileExpr[String](lhs)(ll) >= compileExpr[String](rhs)(rr)
+            }
+          }
+          PredicateJoin(pred)
+        case Some(GreaterThan(lhs, rhs)) =>
+          val pred = (l: Rep[Record], r: Rep[Record]) => {
+            val ll = if (fieldInRecord(mfl, lhs)) l else r
+            val rr = if (fieldInRecord(mfl, rhs)) l else r
+            lhs.dataType match {
+              case FloatType    => compileExpr[Float](lhs)(ll) > compileExpr[Float](rhs)(rr)
+              case DoubleType   => compileExpr[Double](lhs)(ll) > compileExpr[Double](rhs)(rr)
+              case IntegerType  => compileExpr[Int](lhs)(ll) > compileExpr[Int](rhs)(rr)
+              case LongType     => compileExpr[Long](lhs)(ll) > compileExpr[Long](rhs)(rr)
+              case DateType     => compileExpr[Date](lhs)(ll) > compileExpr[Date](rhs)(rr)
+              case StringType   => compileExpr[String](lhs)(ll) > compileExpr[String](rhs)(rr)
+            }
+          }
+          PredicateJoin(pred)
+        case Some(LessThanOrEqual(lhs, rhs)) =>
+          val pred = (l: Rep[Record], r: Rep[Record]) => {
+            val ll = if (fieldInRecord(mfl, lhs)) l else r
+            val rr = if (fieldInRecord(mfl, rhs)) l else r
+            lhs.dataType match {
+              case FloatType    => compileExpr[Float](lhs)(ll) <= compileExpr[Float](rhs)(rr)
+              case DoubleType   => compileExpr[Double](lhs)(ll) <= compileExpr[Double](rhs)(rr)
+              case IntegerType  => compileExpr[Int](lhs)(ll) <= compileExpr[Int](rhs)(rr)
+              case LongType     => compileExpr[Long](lhs)(ll) <= compileExpr[Long](rhs)(rr)
+              case DateType     => compileExpr[Date](lhs)(ll) <= compileExpr[Date](rhs)(rr)
+              case StringType   => compileExpr[String](lhs)(ll) <= compileExpr[String](rhs)(rr)
+            }
+          }
+          PredicateJoin(pred)
+        case Some(Not(exp)) =>
+          compileCond(Some(exp), mfl, mfr, true) match {
+            case PredicateJoin(cond) => PredicateJoin((l, r) => !cond(l, r))
+          }
+        case Some(exp) => throw new RuntimeException("TODO " + exp.getClass)
         case None => // Cartesian product
           val key = (p: Rep[Record]) => { unit[Int](1) }
           val mfk = manifest[Int].asInstanceOf[Manifest[Any]]
-          (key, key, mfk)
+          EquiJoin(key, key, mfk)
       }
 
       def compile(d: LogicalPlan, inputs: Map[String,Rep[Table[Record]]]): Rep[Table[Record]] = d match {
@@ -724,36 +820,98 @@ object Run {
 
           val mfl = extractMF(resl)
           val mfr = extractMF(resr)
-
-          tpe match {
-            case Inner =>
-              val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
-              val reskey =
-                (l: Rep[Record], r: Rep[Record]) => {
-                  record_new[Record](
-                    mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
-                      case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
+          compileCond(cond, mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]]) match {
+            case EquiJoin(lkey, rkey, mfk) =>
+              tpe match {
+                case Inner =>
+                  val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
+                  val reskey =
+                    (l: Rep[Record], r: Rep[Record]) => {
+                      record_new[Record](
+                        mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
+                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
+                        }
+                        ++
+                        mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
+                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
+                        }
+                      )(mfo)
                     }
-                    ++
-                    mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
-                      case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
-                    }
-                  )(mfo)
-                }
 
-              val (lkey, rkey, mfk) = compileCond(cond, mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
-              table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
-            case LeftOuter =>
-              val reskey =
-                (l: Rep[Record], r: Rep[Record]) => l
-              val (lkey, rkey, mfk) = compileCond(cond, mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
-              table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfl, implicitly[SourceContext])
-            case RightOuter =>
-              val reskey =
-                (l: Rep[Record], r: Rep[Record]) => r
-              val (lkey, rkey, mfk) = compileCond(cond, mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
-              table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfl, implicitly[SourceContext])
-            case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
+                  table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
+                case LeftOuter =>
+                  val reskey =
+                    (l: Rep[Record], r: Rep[Record]) => l
+                  table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfl, implicitly[SourceContext])
+                case RightOuter =>
+                  val reskey =
+                    (l: Rep[Record], r: Rep[Record]) => r
+                  table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfl, implicitly[SourceContext])
+                case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
+              }
+            case PredicateJoin(pred) =>
+              tpe match {
+                case Inner =>
+                  val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
+                  val reskey =
+                    (l: Rep[Record], r: Rep[Record]) => {
+                      record_new[Record](
+                        mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
+                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
+                        }
+                        ++
+                        mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
+                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
+                        }
+                      )(mfo)
+                    }
+                  val pos = implicitly[SourceContext]
+                  table_selectmany(
+                    resl,
+                    {(l: Rep[Record]) =>
+                      table_select(
+                        table_where(
+                          resr,
+                          {(r: Rep[Record]) => pred(l, r)}
+                        )(mfr, pos),
+                        {(r: Rep[Record]) => reskey(l, r)}
+                      )(mfr, mfo, pos)
+                    }
+                  )(mfl, mfo, pos)
+              }
+            case MixedJoin(lkey, rkey, mfk, pred) =>
+              tpe match {
+                case Inner =>
+                  val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
+                  val reskey =
+                    (l: Rep[Record], r: Rep[Record]) => {
+                      record_new[Record](
+                        mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
+                          case (name, _) =>
+                            (name, false, (x:Rep[Record]) => field[Any](l, name))
+                        }
+                        ++
+                        mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
+                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
+                        }
+                      )(mfo)
+                    }
+
+                  val pos = implicitly[SourceContext]
+                  table_where(
+                    table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, pos),
+                    pred
+                  )(mfo, pos)
+                case LeftOuter =>
+                  val reskey = (l: Rep[Record], r: Rep[Record]) => l
+
+                  val pos = implicitly[SourceContext]
+                  table_where(
+                    table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfl, pos),
+                    pred
+                  )(mfl, pos)
+                case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
+              }
           }
         case a if a.getClass.getName == expcl =>
           val flp = a.getClass.getDeclaredFields.filter(_.getName == "projections").head
