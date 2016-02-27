@@ -1180,3 +1180,10 @@ def testDelite(s: String, preloadData: Boolean = false) = {
 
   Run.runDelite(res.queryExecution.optimizedPlan, preloadData)
 }
+
+ppl.delite.framework.Config.debug = true
+
+def time[T](a: =>T):T = { 
+  val t = System.currentTimeMillis
+  try a finally println(System.currentTimeMillis - t)
+}

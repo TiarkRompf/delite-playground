@@ -209,6 +209,51 @@ object Run {
         case _ => super.structName(m)
       }
 
+      import java.io.{PrintWriter,StringWriter}
+      import scala.virtualization.lms.internal.{GenericFatCodegen}
+
+      // prettify & indent generated code files output
+      override def emitRegisteredSource(gen: GenericFatCodegen{val IR: DeliteQuery.this.type}, stream: PrintWriter): List[(Sym[Any], Any)] = {
+        def printIndented(str: String)(out: PrintWriter): Unit = {
+          val lines = str.split("[\n\r]")
+          var indent: Int = 0
+          for (l0 <- lines) {
+            val l = l0.trim
+            if (l.length > 0) {
+              var open: Int = 0
+              var close: Int = 0
+              var initClose: Int = 0
+              var nonWsChar: Boolean = false
+              l foreach {
+                case '{' => {
+                  open += 1
+                  if (!nonWsChar) {
+                    nonWsChar = true
+                    initClose = close
+                  }
+                }
+                case '}' => close += 1
+                case x => if (!nonWsChar && !x.isWhitespace) {
+                  nonWsChar = true
+                  initClose = close
+                }
+              }
+              if (!nonWsChar) initClose = close
+              out.println("  " * (indent - initClose) + l)
+              indent += (open - close)
+            }
+          }
+          assert (indent==0, "indentation sanity check")
+        }
+        val s = new StringWriter
+        val p = new PrintWriter(s)
+        val res = super.emitRegisteredSource(gen, p)
+        p.close()
+        val content = s.toString
+        printIndented(content)(stream)
+        stream.flush()
+        res
+      }
 
 
       def extractMF[T](x: Rep[Table[T]]): Manifest[T] = {
