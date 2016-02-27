@@ -723,11 +723,21 @@ object Run {
                     case StringType =>
                       if (order == Ascending)
                         (x:Rep[Record], y:Rep[Record]) => {
-                          (compileExpr[String](child)(x).fcharAt(0) - compileExpr[String](child)(y).fcharAt(0)).toInt
+                          if (compileExpr[String](child)(x) < compileExpr[String](child)(y))
+                            unit[Int](-1)
+                          else if (compileExpr[String](child)(x) > compileExpr[String](child)(y))
+                            unit[Int](1)
+                          else
+                            unit[Int](0)
                         }
                       else
                         (x:Rep[Record], y:Rep[Record]) => {
-                          (compileExpr[String](child)(y).fcharAt(0) - compileExpr[String](child)(x).fcharAt(0)).toInt
+                          if (compileExpr[String](child)(x) < compileExpr[String](child)(y))
+                            unit[Int](1)
+                          else if (compileExpr[String](child)(x) > compileExpr[String](child)(y))
+                            unit[Int](-1)
+                          else
+                            unit[Int](0)
                         }
                   }
                 case _ => throw new RuntimeException("Sorting Expression " + p.getClass + " not supported")

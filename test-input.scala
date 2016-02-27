@@ -1165,6 +1165,32 @@ val tpch22nosub =
     |order by
     |        cntrycode""".stripMargin
 
+val tpch21opt =
+    """select
+      |       s_name,
+      |       count(*) as numwait
+      |from
+      |       supplier,
+      |       lineitem l1 left outer join lineitem l3 on l3.l_orderkey = l1.l_orderkey
+      |                     and l3.l_suppkey <> l1.l_suppkey
+      |                    and l3.l_receiptdate > l3.l_commitdate left semi join lineitem l2 on l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey,
+      |       orders,
+      |       nation
+      |where
+      |        s_suppkey = l1.l_suppkey
+      |        and o_orderkey = l1.l_orderkey
+      |        and o_orderstatus = 'F'
+      |        and l1.l_receiptdate > l1.l_commitdate
+      |        and l3.l_orderkey is NULL
+      |        and s_nationkey = n_nationkey
+      |        and n_name = 'SAUDI ARABIA'
+      |group by
+      |        s_name
+      |order by
+      |        numwait desc,
+      |        s_name
+      |limit 100 """.stripMargin
+
 def testSpark(s: String) = {
   val res = sqlContext.sql(s)
 
