@@ -577,7 +577,7 @@ object Run {
           }
         case Some(And(le, re)) =>
           (compileCond(Some(le), mfl, mfr, forcePred), compileCond(Some(re), mfl, mfr, forcePred)) match {
-            case (EquiJoin(llkey, lrkey, lmfk), EquiJoin(rlkey, rrkey, rmfk)) =>
+            case (EquiJoin(llkey, rlkey, lmfk), EquiJoin(lrkey, rrkey, rmfk)) =>
               val pos = implicitly[SourceContext]
 
               val lekey = (p: Rep[Record]) => { tup2_pack((llkey(p), lrkey(p)))(lmfk, rmfk, pos, new Overload4()) }
