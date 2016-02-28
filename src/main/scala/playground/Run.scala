@@ -903,6 +903,14 @@ object Run {
                   val reskey =
                     (l: Rep[Record], r: Rep[Record]) => r
                   table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfl, implicitly[SourceContext])
+                case LeftSemi =>
+                  val pos = implicitly[SourceContext]
+                  val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(resr), array_length(table_raw_data(resr)))
+, rkey)(mfr, mfk, pos)
+                  table_where(
+                    resl,
+                    (l: Rep[Record]) => fhashmap_contains(grouped, lkey(l))
+                  )(mfl, pos)
                 case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
               }
             case PredicateJoin(pred) =>

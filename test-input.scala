@@ -1165,6 +1165,64 @@ val tpch22nosub =
     |order by
     |        cntrycode""".stripMargin
 
+val tpch4opt = """
+|select
+| o_orderpriority,
+| count(*) as order_count
+|from
+| orders left semi join lineitem on lineitem.l_orderkey = orders.o_orderkey
+| and orders.o_orderdate >= to_date('1993-07-01')
+| and orders.o_orderdate < to_date('1993-10-01')
+| and lineitem.l_commitdate < lineitem.l_receiptdate
+|group by
+| o_orderpriority
+|order by
+| o_orderpriority
+|         """.stripMargin
+
+
+
+val tpch20opt =
+  """select
+    |        distinct s_name,
+    |        s_address
+    |from
+    |        supplier,
+    |        nation,
+    |        (
+    |            select
+    |                    distinct PSupp.ps_suppkey
+    |            from
+    |                   (
+    |                      select
+    |                          ps_partkey, ps_suppkey, 0.5 * sum(l_quantity) as sum_l_quantity
+    |                      from
+    |                          lineitem, partsupp
+    |                      where
+    |                        ps_partkey = l_partkey
+    |                        and ps_suppkey = l_suppkey
+    |                        and l_shipdate >= to_date('1994-01-01')
+    |                        and l_shipdate < to_date('1995-01-01')
+    |                     group by
+    |                        ps_partkey, ps_suppkey
+    |                   ) as T1,
+    |                   partsupp as PSupp left semi join part on PSupp.ps_partkey = p_partkey and p_name like 'forest%'
+    |
+    |            where
+    |                    ps_availqty > T1.sum_l_quantity
+    |                    and T1.ps_partkey = PSupp.ps_partkey
+    |                    and T1.ps_suppkey = PSupp.ps_suppkey
+    |
+    |        )T3
+    |where
+    |        s_suppkey = T3.ps_suppkey
+    |        and s_nationkey = n_nationkey
+    |        and n_name = 'CANADA'
+    |order by
+    |        s_name
+     """.stripMargin
+
+
 val tpch21opt =
     """select
       |       s_name,
@@ -1193,8 +1251,6 @@ val tpch21opt =
 
 def testSpark(s: String) = {
   val res = sqlContext.sql(s)
-
-  System.out.println(res.queryExecution.optimizedPlan)
 
   res.show()
 }
