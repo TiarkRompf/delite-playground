@@ -307,7 +307,8 @@ object Run {
           }
           res.asInstanceOf[Rep[T]]
         case Count(child) =>
-          val res = rec.Sum(l => compileExpr[Long](child.head)(l))
+          // FIXME: handle null
+          val res = rec.Sum(l => unit[Long](1))
           res.asInstanceOf[Rep[T]]
         case Min(child) =>
           val res = child.dataType match {
@@ -592,6 +593,14 @@ object Run {
               PredicateJoin((l, r) => lpred(l, r) && rpred(l, r))
             case (MixedJoin(lkey, rkey, mfk, pred1), PredicateJoin(pred2)) =>
               MixedJoin(lkey, rkey, mfk, rec => pred1(rec) && pred2(rec, rec))
+            case (MixedJoin(llkey, lrkey, lmfk, pred1), EquiJoin(rlkey, rrkey, rmfk)) =>
+              val pos = implicitly[SourceContext]
+
+              val lekey = (p: Rep[Record]) => { tup2_pack((llkey(p), lrkey(p)))(lmfk, rmfk, pos, new Overload4()) }
+              val rekey = (p: Rep[Record]) => { tup2_pack((rlkey(p), rrkey(p)))(lmfk, rmfk, pos, new Overload4()) }
+              val mfk = m_Tup2(lmfk, rmfk).asInstanceOf[Manifest[Any]]
+
+              MixedJoin(lekey, rekey, mfk, pred1)
           }
         case Some(Or(le, re)) =>
           val pred = (compileCond(Some(le), mfl, mfr, true), compileCond(Some(re), mfl, mfr, true)) match {
@@ -651,6 +660,20 @@ object Run {
               case LongType     => compileExpr[Long](lhs)(ll) <= compileExpr[Long](rhs)(rr)
               case DateType     => compileExpr[Date](lhs)(ll) <= compileExpr[Date](rhs)(rr)
               case StringType   => compileExpr[String](lhs)(ll) <= compileExpr[String](rhs)(rr)
+            }
+          }
+          PredicateJoin(pred)
+        case Some(LessThan(lhs, rhs)) =>
+          val pred = (l: Rep[Record], r: Rep[Record]) => {
+            val ll = if (fieldInRecord(mfl, lhs)) l else r
+            val rr = if (fieldInRecord(mfl, rhs)) l else r
+            lhs.dataType match {
+              case FloatType    => compileExpr[Float](lhs)(ll) < compileExpr[Float](rhs)(rr)
+              case DoubleType   => compileExpr[Double](lhs)(ll) < compileExpr[Double](rhs)(rr)
+              case IntegerType  => compileExpr[Int](lhs)(ll) < compileExpr[Int](rhs)(rr)
+              case LongType     => compileExpr[Long](lhs)(ll) < compileExpr[Long](rhs)(rr)
+              case DateType     => compileExpr[Date](lhs)(ll) < compileExpr[Date](rhs)(rr)
+              case StringType   => compileExpr[String](lhs)(ll) < compileExpr[String](rhs)(rr)
             }
           }
           PredicateJoin(pred)
@@ -815,6 +838,8 @@ object Run {
 
         case Project(projectList, child) =>
           val res = compile(child, inputs)
+
+          // TODO handle distinc select
 
           if (projectList.length == 0)
             return res
