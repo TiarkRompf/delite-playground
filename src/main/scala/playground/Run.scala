@@ -280,6 +280,28 @@ object Run {
                   tpe)
       }
 
+      val intnull    = unit[Int](0x7FFFFFFF)
+      val longnull   = unit[Long](0x7FFFFFFF)
+      val floatnull  = unit[Float](1e20f)
+      val doublenull = unit[Double](1e20)
+      val datenull   = Date(0)
+      val strnull    = unit[String]("")
+
+      def nullrec(v1 : RefinedManifest[Record]): Rep[Record] = {
+        record_new[Record](
+          v1.fields.map {
+            case (name, man) if man == manifest[Int]    => (name, false, (x:Any) => intnull)
+            case (name, man) if man == manifest[Long]   => (name, false, (x:Any) => longnull)
+            case (name, man) if man == manifest[Float]  => (name, false, (x:Any) => floatnull)
+            case (name, man) if man == manifest[Double] => (name, false, (x:Any) => doublenull)
+            case (name, man) if man == manifest[java.util.Date]   => (name, false, (x:Any) => datenull)
+            case (name, man) if man == manifest[String] => (name, false, (x:Any) => strnull)
+            case (name, man) => throw new RuntimeException(">> " + man.getClass)
+          }
+        )(v1)
+
+      }
+
       def compileAggExpr[T:Manifest](d: AggregateFunction)(rec: Rep[Table[Record]]): Rep[T] = d match {
         case Sum(child) =>
           val res = child.dataType match {
@@ -512,8 +534,17 @@ object Run {
           }
           in_t().asInstanceOf[Rep[T]]
         case IsNull(value) =>
+          val res = value.dataType match {
+            case FloatType    => compileExpr[Float](value)(rec)   == floatnull
+            case DoubleType   => compileExpr[Double](value)(rec)  == doublenull
+            case IntegerType  => compileExpr[Int](value)(rec)     == intnull
+            case LongType     => compileExpr[Long](value)(rec)    == longnull
+            case DateType     => compileExpr[Date](value)(rec)    == datenull
+            case StringType   => compileExpr[String](value)(rec)  == strnull
+          }
+          res.asInstanceOf[Rep[T]]
           // FIXME: IsNull
-          throw new RuntimeException("IsNull not supported")
+          // throw new RuntimeException("IsNull not supported")
         case a : Expression if a.getClass.getName == aggexp =>
           // class AggregateExpression is private, so we use reflection
           // to get around access control
@@ -921,12 +952,38 @@ object Run {
 
                   table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
                 case LeftOuter =>
+                  val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
+                  val nullval = nullrec(mfr.asInstanceOf[RefinedManifest[Record]])
                   val reskey =
-                    (l: Rep[Record], r: Rep[Record]) => l
-                  table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfl, implicitly[SourceContext])
+                    (l: Rep[Record], r: Rep[Record]) => {
+                      record_new[Record](
+                        mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
+                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
+                        }
+                        ++
+                        mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
+                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
+                        }
+                      )(mfo)
+                    }
+                  val pos = implicitly[SourceContext]
+                  val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(resr), array_length(table_raw_data(resr))), rkey)(mfr, mfk, pos)
+                  table_selectmany(
+                    resl,
+                    {(l: Rep[Record]) =>
+                      if (fhashmap_contains(grouped, lkey(l))) {
+                        val buf = fhashmap_get(grouped, lkey(l))
+                        table_select(
+                          table_object_apply(array_buffer_unsafe_result(buf), array_buffer_length(buf))(mfo, pos, new Overload3),
+                          {(r: Rep[Record]) => reskey(l, r)}
+                        )(mfr, mfo, pos)
+                      } else {
+                        table_object_apply(Seq(reskey(l, nullval)))(mfo, pos, new Overload4)
+                      }
+                    }
+                  )(mfl, mfo, pos)
                 case RightOuter =>
-                  val reskey =
-                    (l: Rep[Record], r: Rep[Record]) => r
+                  val reskey = (l: Rep[Record], r: Rep[Record]) => r
                   table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfl, implicitly[SourceContext])
                 case LeftSemi =>
                   val pos = implicitly[SourceContext]

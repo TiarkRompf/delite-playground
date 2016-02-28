@@ -986,47 +986,50 @@ val tpch20 =
 
 val tpch20nosub =
   """select
-    |        distinct s_name,
-    |        s_address
+    |      distinct s_name,
+    |      s_address
     |from
-    |        supplier,
-    |        nation,
-    |        (
-    |                select
-    |                        distinct PSupp.ps_suppkey
-    |                from
-    |                        partsupp as PSupp,(
-    |                                select ps_partkey, ps_suppkey, 0.5 * sum(l_quantity) as sum_l_quantity
-    |                                from lineitem, partsupp
-    |                                where l_partkey = ps_partkey
-    |                                      and l_suppkey = ps_suppkey
-    |                                      and l_shipdate >= to_date('1994-01-01')
-    |                                      and l_shipdate < to_date('1995-01-01')
-    |
-    |                          group by ps_partkey, ps_suppkey
-    |                        ) as T1,
-    |
-    |                                        (
-    |                                select
-    |                                        p_partkey
-    |                                from
-    |                                        part
-    |                                where
-    |                                        p_name like 'forest%'
-    |                        ) as T2
-    |                where
-    |                        PSupp.ps_partkey = T2.p_partkey
-    |                        and ps_availqty > T1.sum_l_quantity
-    |          and T1.ps_partkey = PSupp.ps_partkey
-    |          and T1.ps_suppkey = PSupp.ps_suppkey
-    |
-    |        )T3
+    |      supplier,
+    |      nation,
+    |      (select
+    |         distinct PSupp.ps_suppkey
+    |      from
+    |         partsupp as PSupp,
+    |         (select
+    |             ps_partkey,
+    |             ps_suppkey,
+    |             0.5 * sum(l_quantity) as sum_l_quantity
+    |         from
+    |             lineitem,
+    |             partsupp
+    |         where
+    |             l_partkey = ps_partkey
+    |             and l_suppkey = ps_suppkey
+    |             and l_shipdate >= to_date('1994-01-01')
+    |             and l_shipdate < to_date('1995-01-01')
+    |         group by
+    |             ps_partkey,
+    |             ps_suppkey
+    |         ) as T1,
+    |         (select
+    |             p_partkey
+    |         from
+    |             part
+    |         where
+    |             p_name like 'forest%'
+    |         ) as T2
+    |      where
+    |         PSupp.ps_partkey = T2.p_partkey
+    |         and ps_availqty > T1.sum_l_quantity
+    |         and T1.ps_partkey = PSupp.ps_partkey
+    |         and T1.ps_suppkey = PSupp.ps_suppkey)T3
     |where
-    |        s_suppkey = T3.ps_suppkey
-    |        and s_nationkey = n_nationkey
-    |        and n_name = 'CANADA'
+    |   s_suppkey = T3.ps_suppkey
+    |   and s_nationkey = n_nationkey
+    |   and n_name = 'CANADA'
     |order by
-    |        s_name""".stripMargin
+    |   s_name
+  """.stripMargin
 
 val tpch21 =
   """select
@@ -1143,23 +1146,24 @@ val tpch22nosub =
     |        count(*) as numcust,
     |        sum(c_acctbal) as totacctbal
     |from
-    |     (
-    |          select
-    |              substring(c_phone, 1, 2) as cntrycode,
-    |            c_acctbal
-    |          from
-    |              customer left outer join orders on o_custkey = c_custkey ,
-    |              (
-    |              select avg(c_acctbal) as avg_c_acctbal
-    |              from customer
-    |              where
-    |                   c_acctbal > 0.00
-    |                    and substring(c_phone, 1, 2) in ('13', '31', '23', '29', '30', '18', '17')) as T
-    |          where
-    |                substring(c_phone, 1, 2) in ('13', '31', '23', '29', '30', '18', '17')
-    |          and o_custkey is NULL
-    |          and c_acctbal > T.avg_c_acctbal
-    |        ) as custsale
+    |     (select
+    |         substring(c_phone, 1, 2) as cntrycode,
+    |         c_acctbal
+    |      from
+    |         customer left outer join orders on o_custkey = c_custkey ,
+    |         (select
+    |           avg(c_acctbal) as avg_c_acctbal
+    |         from
+    |           customer
+    |         where
+    |           c_acctbal > 0.00
+    |           and substring(c_phone, 1, 2) in ('13', '31', '23', '29', '30', '18', '17')
+    |         ) as T
+    |      where
+    |       substring(c_phone, 1, 2) in ('13', '31', '23', '29', '30', '18', '17')
+    |        and o_custkey is NULL
+    |        and c_acctbal > T.avg_c_acctbal
+    |      ) as custsale
     |group by
     |        cntrycode
     |order by
@@ -1182,7 +1186,7 @@ val tpch4opt = """
 
 
 
-val tpch20opt =
+val tpch20nosub =
   """select
     |        distinct s_name,
     |        s_address
