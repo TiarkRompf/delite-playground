@@ -75,7 +75,7 @@ object Run {
           case Def(Table2_Count(s)) => (a:Exp[A]) => unit(1)
           case Def(Table_Max(s, maxSelector)) => maxSelector
           case Def(Table_Min(s, minSelector)) => minSelector
-          case Def(Internal_pack2(u,v)) => (a: Exp[A]) => 
+          case Def(Internal_pack2(u,v)) => (a: Exp[A]) =>
             pack(rewriteMap(u)(a), rewriteMap(v)(a))(mtype(u.tp),mtype(v.tp),ctx,implicitly)
           // TODO: Spark/Delite
           case Def(a) => Console.err.println("found unknown map: " + a.toString); failed = true; null
@@ -91,8 +91,8 @@ object Run {
           case Def(d@Table2_Count(s)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(implicitly[Numeric[Int]]),mtype(manifest[Int]),ctx)
           case Def(d@Table_Max(_,_)) => (a:Exp[N],b:Exp[N]) => ordering_max(a,b)(otype(d._ordR),mtype(d._mR),ctx)
           case Def(d@Table_Min(_,_)) => (a:Exp[N],b:Exp[N]) => ordering_min(a,b)(otype(d._ordR),mtype(d._mR),ctx)
-          case Def(d@Internal_pack2(u,v)) => (a:Exp[Tup2[N,N]],b:Exp[Tup2[N,N]]) => 
-            pack(rewriteReduce(u)(tup2__1(a)(mtype(u.tp),ctx),tup2__1(b)(mtype(u.tp),ctx)), 
+          case Def(d@Internal_pack2(u,v)) => (a:Exp[Tup2[N,N]],b:Exp[Tup2[N,N]]) =>
+            pack(rewriteReduce(u)(tup2__1(a)(mtype(u.tp),ctx),tup2__1(b)(mtype(u.tp),ctx)),
                  rewriteReduce(v)(tup2__2(a)(mtype(v.tp),ctx),tup2__2(b)(mtype(v.tp),ctx)))(mtype(u.tp),mtype(v.tp),ctx,implicitly)
           case Def(a) => Console.err.println("found unknown reduce: " + a.toString); failed = true; null
           case _ => Console.err.println("found unknown reduce: " + value.toString); failed = true; null
@@ -143,14 +143,14 @@ object Run {
         case _ => super.table_select(self, resultSelector)
       }
 
-    
+
 
       override def table_select[A:Manifest,R:Manifest](self: Rep[Table[A]], resultSelector: (Rep[A]) => Rep[R])(implicit __pos: SourceContext): Exp[Table[R]] = {
         def sel1(a: Rep[R]): Rep[R] = (a match {
           // right now only a/b is supported. TODO: add a+b etc
-          case Def(Primitive_Forge_double_divide(a,b)) => 
+          case Def(Primitive_Forge_double_divide(a,b)) =>
             val a1 = a/*rewriteMap(a)(e)*/.asInstanceOf[Exp[Double]] // should we recurse here?
-            val b1 = b/*rewriteMap(b)(e)*/.asInstanceOf[Exp[Double]]  
+            val b1 = b/*rewriteMap(b)(e)*/.asInstanceOf[Exp[Double]]
             pack(a1,b1)
           case Def(Primitive_Forge_double_times(Const(c),b)) => b // TODO: more general case
           case Def(Ordering_Gt(a,b@Const(c))) => a
@@ -160,7 +160,7 @@ object Run {
         }).asInstanceOf[Rep[R]]
 
         def sel2(a: Rep[R])(v: Rep[R]): Rep[R] = (a match {
-          case Def(Primitive_Forge_double_divide(a,b)) => 
+          case Def(Primitive_Forge_double_divide(a,b)) =>
             val v1 = v.asInstanceOf[Rep[Tup2[Double,Double]]]
             val a1 = tup2__1(v1)/*sel2(a)(v._1)*/.asInstanceOf[Exp[Double]] // should we recurse here?
             val b1 = tup2__2(v1)/*sel2(b)(v._2)*/.asInstanceOf[Exp[Double]]
@@ -169,7 +169,7 @@ object Run {
             primitive_forge_double_times(Const(c),v.asInstanceOf[Rep[Double]])
           case Def(d@Ordering_Gt(a,b@Const(c))) => ordering_gt(v,b)(d._ordA,d._mA,__pos)
           case Def(Struct(tag: StructTag[R], elems)) =>
-            struct[R](tag, elems map { case (key, value) => 
+            struct[R](tag, elems map { case (key, value) =>
               (key, sel2(value.asInstanceOf[Rep[R]])(field[R](v,key)(mtype(value.tp),__pos))) })
           case _ => v
         }).asInstanceOf[Rep[R]]
@@ -203,7 +203,7 @@ object Run {
       // ### end groupBy fusion code ###
 
       override def structName[T](m: Manifest[T]): String = m match {
-        case rm: RefinedManifest[_] => 
+        case rm: RefinedManifest[_] =>
           // order matters here!!
           "Anon" + math.abs(rm.fields.map(f => f._1.## + f._2.toString.##).##)
         case _ => super.structName(m)
@@ -845,12 +845,13 @@ object Run {
         case Limit(value, child) =>
           val res = compile(child, inputs)
           res
-        case a: LeafNode if a.getClass.getName == lgr =>
+        //case a: LeafNode if a.getClass.getName == lgr =>
+        case LogicalRelation(relation, x) =>
           // class LogicalRelation is private, so we use reflection
           // to get around access control
-          val fld = a.getClass.getDeclaredFields.filter(_.getName == "relation").head
-          fld.setAccessible(true)
-          val relation = fld.get(a).asInstanceOf[BaseRelation]
+          // val fld = a.getClass.getDeclaredFields.filter(_.getName == "relation").head
+          // fld.setAccessible(true)
+          // val relation = fld.get(a).asInstanceOf[BaseRelation]
           relation match {
             case relation: CsvRelation =>
               //println("schema:")
@@ -993,12 +994,7 @@ object Run {
           preload(child)
         case Limit(value, child) =>
           preload(child)
-        case a: LeafNode if a.getClass.getName == lgr =>
-          // class LogicalRelation is private, so we use reflection
-          // to get around access control
-          val fld = a.getClass.getDeclaredFields.filter(_.getName == "relation").head
-          fld.setAccessible(true)
-          val relation = fld.get(a).asInstanceOf[BaseRelation]
+        case LogicalRelation(relation, _) =>
           relation match {
             case relation: CsvRelation =>
               //println("schema:")
