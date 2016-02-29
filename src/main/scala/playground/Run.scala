@@ -644,7 +644,7 @@ object Run {
               PredicateJoin((l, r) => lpred(l, r) && rpred(l, r))
             case (MixedJoin(lkey, rkey, mfk, pred1), PredicateJoin(pred2)) =>
               MixedJoin(lkey, rkey, mfk, rec => pred1(rec) && pred2(rec, rec))
-            case (MixedJoin(llkey, lrkey, lmfk, pred1), EquiJoin(rlkey, rrkey, rmfk)) =>
+            case (MixedJoin(llkey, rlkey, lmfk, pred1), EquiJoin(lrkey, rrkey, rmfk)) =>
               val pos = implicitly[SourceContext]
 
               val lekey = (p: Rep[Record]) => { tup2_pack((llkey(p), lrkey(p)))(lmfk, rmfk, pos, new Overload4()) }
