@@ -315,6 +315,12 @@ object Run {
 
       }
 
+      def convertAttribRefsType(fields: Seq[AttributeReference]) : Manifest[_] = {
+        val names = fields map (a => getName(a))
+        val elems = fields map (a => convertDataType(a.dataType))
+        ManifestFactory.refinedType[Record](manifest[Record], names.toList, elems.toList)
+      }
+
       def compileAggExpr[T:Manifest](d: AggregateFunction)(rec: Rep[Table[Record]]): Rep[T] = d match {
         case Sum(child) =>
           val res = child.dataType match {
@@ -371,8 +377,8 @@ object Run {
       }
 
       def compileExpr[T:Manifest](d: Expression)(rec: Rep[_]): Rep[T] = d match {
-        case AttributeReference(name, _, _, _) =>
-          field[T](rec, name)
+        case AttributeReference(_, _, _, _) =>
+          field[T](rec, getName(d))
         case Literal(value, DateType) =>
           conv_date(value.asInstanceOf[Int]).asInstanceOf[Rep[T]]
         case Literal(value, StringType) =>
@@ -570,13 +576,14 @@ object Run {
       }
 
       def getName(p: Expression): String = p match {
-        case AttributeReference(name, _, _, _) => name
-        case Alias(_, name) => name
+        case p@AttributeReference(name, _, _, _) => name + "_" + p.exprId.id.toString
+        case p@Alias(_, name) => name + "_" + p.exprId.id.toString
         case _ => throw new RuntimeException("getName, TODO: " + p.getClass.getName)
       }
 
       def fieldInRecord(man: RefinedManifest[Record], exp: Expression) : Boolean = exp match {
-        case AttributeReference(name, _, _, _) =>
+        case AttributeReference(_, _, _, _) =>
+          val name = getName(exp)
           man.fields.exists {
             case (n, _) => n == name
           }
@@ -915,7 +922,7 @@ object Run {
           val res = compile(child, inputs)
           res
         //case a: LeafNode if a.getClass.getName == lgr =>
-        case LogicalRelation(relation, x) =>
+        case a@LogicalRelation(relation, x) =>
           // class LogicalRelation is private, so we use reflection
           // to get around access control
           // val fld = a.getClass.getDeclaredFields.filter(_.getName == "relation").head
@@ -935,7 +942,7 @@ object Run {
                */
               if (preloadData) inputs(relation.location) else {
                 trait TYPE
-                implicit val mf: Manifest[TYPE] = convertDataType(relation.schema).asInstanceOf[Manifest[TYPE]]
+                implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
                 Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]]
               }
           }
@@ -945,6 +952,8 @@ object Run {
 
           val mfl = extractMF(resl)
           val mfr = extractMF(resr)
+          Console.err.println("left.fields: "+ mfl.asInstanceOf[RefinedManifest[Record]].fields.toString)
+          Console.err.println("right.fields: "+ mfr.asInstanceOf[RefinedManifest[Record]].fields.toString)
           compileCond(cond, mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]]) match {
             case EquiJoin(lkey, rkey, mfk) =>
               tpe match {
@@ -1097,7 +1106,7 @@ object Run {
           preload(child)
         case Limit(value, child) =>
           preload(child)
-        case LogicalRelation(relation, _) =>
+        case a@LogicalRelation(relation, _) =>
           relation match {
             case relation: CsvRelation =>
               //println("schema:")
@@ -1111,7 +1120,7 @@ object Run {
               println(relation.delimiter)
                */
               trait TYPE
-              implicit val mf: Manifest[TYPE] = convertDataType(relation.schema).asInstanceOf[Manifest[TYPE]]
+                implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
               Map(relation.location -> Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]])
           }
         case Join(left, right, tpe, cond) =>
