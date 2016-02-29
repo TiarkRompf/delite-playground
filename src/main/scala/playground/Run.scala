@@ -154,6 +154,10 @@ object Run {
             pack(a1,b1)
           case Def(Primitive_Forge_double_times(Const(c),b)) => b // TODO: more general case
           case Def(Ordering_Gt(a,b@Const(c))) => a
+          case Def(Ordering_Gt(a,b)) => 
+            val a1 = a/*rewriteMap(a)(e)*/.asInstanceOf[Exp[Double]] // should we recurse here?
+            val b1 = b/*rewriteMap(b)(e)*/.asInstanceOf[Exp[Double]]
+            pack(a1,b1)
           case Def(Struct(tag: StructTag[R], elems)) =>
             struct[R](tag, elems map { case (key, value) => (key, sel1(value.asInstanceOf[Rep[R]])) })
           case _ => a
@@ -168,6 +172,12 @@ object Run {
           case Def(Primitive_Forge_double_times(Const(c:Double),b)) => // TODO: handle more general case
             primitive_forge_double_times(Const(c),v.asInstanceOf[Rep[Double]])
           case Def(d@Ordering_Gt(a,b@Const(c))) => ordering_gt(v,b)(d._ordA,d._mA,__pos)
+          case Def(d@Ordering_Gt(a,b)) => 
+            val v1 = v.asInstanceOf[Rep[Tup2[Double,Double]]]
+            val a1 = tup2__1(v1)/*sel2(a)(v._1)*/.asInstanceOf[Exp[Double]] // should we recurse here?
+            val b1 = tup2__2(v1)/*sel2(b)(v._2)*/.asInstanceOf[Exp[Double]]
+            assert(d._mA == manifest[Double], "FIXME: only supporting Ordering[Double]")
+            ordering_gt(a1,b1)(d._ordA.asInstanceOf[Ordering[Double]],manifest[Double],__pos)
           case Def(Struct(tag: StructTag[R], elems)) =>
             struct[R](tag, elems map { case (key, value) =>
               (key, sel2(value.asInstanceOf[Rep[R]])(field[R](v,key)(mtype(value.tp),__pos))) })
@@ -178,6 +188,9 @@ object Run {
           case Def(Primitive_Forge_double_divide(a,b)) => manifest[Tup2[Double,Double]]
           case Def(Primitive_Forge_double_times(Const(c),b)) => b.tp
           case Def(Ordering_Gt(a,b@Const(c))) => a.tp
+          case Def(d@Ordering_Gt(a,b)) => 
+            assert(d._mA == manifest[Double], "FIXME: only supporting Ordering[Double]")
+            manifest[Tup2[Double,Double]]
           case Def(Struct(tag: StructTag[R], elems)) =>
             val em = elems map { case (key, value) => (key, tpe1(value.asInstanceOf[Rep[R]])) }
             ManifestFactory.refinedType[Record](manifest[Record], em.map(_._1).toList, em.map(_._2).toList)
