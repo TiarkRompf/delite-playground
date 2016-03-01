@@ -752,7 +752,7 @@ object Run {
           EquiJoin(key, key, mfk)
       }
 
-      def compile(d: LogicalPlan, inputs: Map[String,Rep[Table[Record]]]): Rep[Table[Record]] = d match {
+      def compile(d: LogicalPlan, inputs: Map[LogicalRelation,Rep[Table[Record]]]): Rep[Table[Record]] = d match {
         case Sort(sortingExpr, global, child) =>
           val res = compile(child, inputs)
           val mfa = extractMF(res)
@@ -953,7 +953,7 @@ object Run {
               println("delimiter:")
               println(relation.delimiter)
                */
-              if (preloadData) inputs(relation.location) else {
+              if (preloadData) inputs(a) else {
                 trait TYPE
                 implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
                 Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]]
@@ -965,8 +965,6 @@ object Run {
 
           val mfl = extractMF(resl)
           val mfr = extractMF(resr)
-          Console.err.println("left.fields: "+ mfl.asInstanceOf[RefinedManifest[Record]].fields.toString)
-          Console.err.println("right.fields: "+ mfr.asInstanceOf[RefinedManifest[Record]].fields.toString)
           compileCond(cond, mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]]) match {
             case EquiJoin(lkey, rkey, mfk) =>
               tpe match {
@@ -1139,7 +1137,7 @@ object Run {
         case _ => throw new RuntimeException("unknown query operator: " + d.getClass)
       }
 
-      def preload(d: LogicalPlan): Map[String,Rep[Table[Record]]] = d match {
+      def preload(d: LogicalPlan): Map[LogicalRelation,Rep[Table[Record]]] = d match {
         case Sort(sortingExpr, global, child) =>
           preload(child)
         case Aggregate(groupingExpr, aggregateExpr, child) =>
@@ -1165,7 +1163,7 @@ object Run {
                */
               trait TYPE
                 implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
-              Map(relation.location -> Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]])
+              Map(a -> Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]])
           }
         case Join(left, right, tpe, cond) =>
           preload(left) ++ preload(right)
@@ -1186,7 +1184,7 @@ object Run {
       override def main() {
         println("TPC-H")
 
-        var inputs: Map[String,Rep[Table[Record]]] = Map()
+        var inputs: Map[LogicalRelation,Rep[Table[Record]]] = Map()
 
         if (preloadData) {
           tic("load")
