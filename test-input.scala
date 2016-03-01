@@ -1269,7 +1269,7 @@ def testDelite(s: String, preloadData: Boolean = false) = {
 
 ppl.delite.framework.Config.debug = true
 
-def time[T](a: =>T):T = { 
+def time[T](a: =>T):T = {
   val t = System.currentTimeMillis
   try a finally println(System.currentTimeMillis - t)
 }

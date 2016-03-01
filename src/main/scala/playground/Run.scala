@@ -154,7 +154,7 @@ object Run {
             pack(a1,b1)
           case Def(Primitive_Forge_double_times(Const(c),b)) => b // TODO: more general case
           case Def(Ordering_Gt(a,b@Const(c))) => a
-          case Def(Ordering_Gt(a,b)) => 
+          case Def(Ordering_Gt(a,b)) =>
             val a1 = a/*rewriteMap(a)(e)*/.asInstanceOf[Exp[Double]] // should we recurse here?
             val b1 = b/*rewriteMap(b)(e)*/.asInstanceOf[Exp[Double]]
             pack(a1,b1)
@@ -172,7 +172,7 @@ object Run {
           case Def(Primitive_Forge_double_times(Const(c:Double),b)) => // TODO: handle more general case
             primitive_forge_double_times(Const(c),v.asInstanceOf[Rep[Double]])
           case Def(d@Ordering_Gt(a,b@Const(c))) => ordering_gt(v,b)(d._ordA,d._mA,__pos)
-          case Def(d@Ordering_Gt(a,b)) => 
+          case Def(d@Ordering_Gt(a,b)) =>
             val v1 = v.asInstanceOf[Rep[Tup2[Double,Double]]]
             val a1 = tup2__1(v1)/*sel2(a)(v._1)*/.asInstanceOf[Exp[Double]] // should we recurse here?
             val b1 = tup2__2(v1)/*sel2(b)(v._2)*/.asInstanceOf[Exp[Double]]
@@ -188,7 +188,7 @@ object Run {
           case Def(Primitive_Forge_double_divide(a,b)) => manifest[Tup2[Double,Double]]
           case Def(Primitive_Forge_double_times(Const(c),b)) => b.tp
           case Def(Ordering_Gt(a,b@Const(c))) => a.tp
-          case Def(d@Ordering_Gt(a,b)) => 
+          case Def(d@Ordering_Gt(a,b)) =>
             assert(d._mA == manifest[Double], "FIXME: only supporting Ordering[Double]")
             manifest[Tup2[Double,Double]]
           case Def(Struct(tag: StructTag[R], elems)) =>
@@ -349,7 +349,14 @@ object Run {
           res.asInstanceOf[Rep[T]]
         case Count(child) =>
           // FIXME: handle null
-          val res = rec.Sum(l => unit[Long](1))
+          val res = child.head.dataType match {
+            case IntegerType  => rec.Sum(l => if (compileExpr[Int](child.head)(l) != intnull) 1 else 0)
+            case LongType     => rec.Sum(l => if (compileExpr[Long](child.head)(l) != longnull) 1 else 0)
+            case FloatType    => rec.Sum(l => if (compileExpr[Float](child.head)(l)!= floatnull) 1 else 0)
+            case DoubleType   => rec.Sum(l => if (compileExpr[Double](child.head)(l) != doublenull) 1 else 0)
+            case DateType     => rec.Sum(l => if (compileExpr[Date](child.head)(l) != datenull) 1 else 0)
+            case StringType   => rec.Sum(l => if (compileExpr[String](child.head)(l) != strnull) 1 else 0)
+          }
           res.asInstanceOf[Rep[T]]
         case Min(child) =>
           val res = child.dataType match {
@@ -996,7 +1003,7 @@ object Run {
                       if (fhashmap_contains(grouped, lkey(l))) {
                         val buf = fhashmap_get(grouped, lkey(l))
                         table_select(
-                          table_object_apply(array_buffer_unsafe_result(buf), array_buffer_length(buf))(mfo, pos, new Overload3),
+                          table_object_apply(array_buffer_result(buf), array_buffer_length(buf))(mfr, pos, new Overload3),
                           {(r: Rep[Record]) => reskey(l, r)}
                         )(mfr, mfo, pos)
                       } else {
