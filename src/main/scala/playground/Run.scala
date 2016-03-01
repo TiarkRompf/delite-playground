@@ -571,6 +571,12 @@ object Run {
           res.asInstanceOf[Rep[T]]
           // FIXME: IsNull
           // throw new RuntimeException("IsNull not supported")
+        case If(cond, firstbranch, secondbranch) =>
+          val res = if (compileExpr[Boolean](cond)(rec))
+                      compileExpr[T](firstbranch)(rec)
+                    else
+                      compileExpr[T](secondbranch)(rec)
+          res.asInstanceOf[Rep[T]]
         case a : Expression if a.getClass.getName == aggexp =>
           // class AggregateExpression is private, so we use reflection
           // to get around access control
@@ -1094,11 +1100,42 @@ object Run {
           val projections = flp.get(a).asInstanceOf[Seq[Seq[Expression]]]
           val flo = a.getClass.getDeclaredFields.filter(_.getName == "output").head
           flo.setAccessible(true)
-          val output = flo.get(a).asInstanceOf[Seq[Seq[Expression]]]
+          val output = flo.get(a).asInstanceOf[Seq[Expression]]
           val flc = a.getClass.getDeclaredFields.filter(_.getName == "child").head
           flc.setAccessible(true)
           val child = flc.get(a).asInstanceOf[LogicalPlan]
-          compile(child, inputs)
+          System.out.println("Expand")
+          System.out.println(projections)
+          System.out.println(output)
+          val res = compile(child, inputs)
+
+          val mfa = extractMF(res)
+          val mfo = ManifestFactory.refinedType[Record](
+                  manifest[Record],
+                  output.map {p => getName(p)}.toList,
+                  output.toList.map { (p:Expression) =>
+                      convertType(p)}.toList ).asInstanceOf[Manifest[Any]]
+
+          val pos = implicitly[SourceContext]
+          val tres = table_selectmany(
+            res,
+            {(rec: Rep[Record]) =>
+              table_object_apply(
+                projections.map {
+                  case (proj: Seq[Expression]) =>
+                    record_new(
+                      proj.zip(output).map {
+                        case (p:Expression, q: Expression) => {
+                          val mfp = convertType(p).asInstanceOf[Manifest[Any]]
+                          (getName(q), false, (x:Any) => compileExpr[Any](p)(rec)(mfp))
+                        }
+                      }
+                    )(mfo)
+                }.toSeq
+              )(mfo, pos, new Overload4)
+           }
+          )(mfa, mfo, pos)
+          tres.asInstanceOf[Rep[Table[Record]]]
         case _ => throw new RuntimeException("unknown query operator: " + d.getClass)
       }
 
