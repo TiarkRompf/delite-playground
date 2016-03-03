@@ -462,12 +462,9 @@ object Run {
           }
           bo.asInstanceOf[Rep[T]]
         case Alias(child, name) =>
-          val res = compileExpr[T](child)(rec)
-          res
+          compileExpr[T](child)(rec)
         case Cast(child, dataType) =>
           compileExpr[T](child)(rec)
-      //  case AggregateExpression(func, mode, isDistinct) =>
-      //    compileExpr[T](func)(rec)
         case Add(left, right) =>
           val res = left.dataType match {
             case FloatType  =>
@@ -509,9 +506,7 @@ object Run {
             case FloatType  =>
               compileExpr[Float](left)(rec) / compileExpr[Float](right)(rec)
             case DoubleType  =>
-              val ll = compileExpr[Double](left)(rec)
-              val rr = compileExpr[Double](right)(rec)
-              ll / rr
+              compileExpr[Double](left)(rec) / compileExpr[Double](right)(rec)
             case IntegerType =>
               compileExpr[Int](left)(rec) / compileExpr[Int](right)(rec)
             case LongType =>
@@ -521,21 +516,18 @@ object Run {
         case CaseWhen(branches) =>
           def aux_t (list:Seq[Expression]): List[(Expression, Expression)] = list match {
             case cond::value::q => (cond, value)::aux_t(q)
-            case _ => Nil
+            case default::Nil => (Literal(true), default)::Nil
+            case Nil => Nil
           }
 
-          val default = compileExpr[T](branches.last)(rec)
-
+          val default = nullvalue(d.dataType).asInstanceOf[Rep[T]]
           val list = aux_t(branches)
-          def case_t () : Rep[T] = {
-            list.foldRight (default) {
-              case ((cond, value), rhs) => if (compileExpr[Boolean](cond)(rec))
-                                              compileExpr[T](value)(rec)
-                                            else
-                                              rhs
-            }
+          list.foldRight (default) {
+            case ((cond, value), rhs) => if (compileExpr[Boolean](cond)(rec))
+                                            compileExpr[T](value)(rec)
+                                          else
+                                            rhs
           }
-          case_t()
         case StartsWith(str, pref) =>
           compileExpr[String](str)(rec).startsWith(compileExpr[String](pref)(rec)).asInstanceOf[Rep[T]]
         case EndsWith(str, suff) =>
@@ -566,12 +558,11 @@ object Run {
           primitive_forge_int_shift_right_unsigned(date_value(compileExpr[Date](exp)(rec)), unit[Int](9)).asInstanceOf[Rep[T]]
         case In (value, list) =>
           val default = unit[Boolean](false).asInstanceOf[Rep[Boolean]]
-          def in_t() : Rep[Boolean] = {
-            list.foldRight (default) {
-              case (p, rhs) => infix_||(compileExpr[Boolean](EqualTo(p, value))(rec), rhs)
+          // TODO improve code?
+          val res = list.foldRight (default) {
+              case (p, rhs) => infix_||(rhs, compileExpr[Boolean](EqualTo(p, value))(rec))
             }
-          }
-          in_t().asInstanceOf[Rep[T]]
+          res.asInstanceOf[Rep[T]]
         case IsNull(value) =>
           val res = isnull(value)(rec.asInstanceOf[Rep[Record]])
           res.asInstanceOf[Rep[T]]
@@ -1150,9 +1141,6 @@ object Run {
           val flc = a.getClass.getDeclaredFields.filter(_.getName == "child").head
           flc.setAccessible(true)
           val child = flc.get(a).asInstanceOf[LogicalPlan]
-          System.out.println("Expand")
-          System.out.println(projections)
-          System.out.println(output)
           val res = compile(child, inputs)
 
           val mfa = extractMF(res)
