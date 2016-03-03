@@ -537,19 +537,26 @@ object Run {
         case Like(left, right) =>
 
           // Hack
+          // TODO use indexWhere(c => "%_".contains(c))
           val token = right match {
-            case Literal(value, StringType) => value.toString.split('%')
+            case Literal(value, StringType) => value.toString.split('%').toList.filter(_.length > 0)
             case _ => throw new RuntimeException("Like: shouldn't happen")
           }
 
-          val default = unit[Boolean](true).asInstanceOf[Rep[Boolean]]
+          val minusone = unit[Int](-1).asInstanceOf[Rep[Int]]
+          val zero = unit[Int](0).asInstanceOf[Rep[Int]]
           val value = compileExpr[String](left)(rec)
-          def like_t() : Rep[Boolean] = {
-            token.foldLeft (default) {
-              case (lhs, p) => infix_&&(lhs, fstring_contains(value, unit[String](p)))
-            }
+
+          def res(l: List[String], idx: Rep[Int]): Rep[Boolean] = l match {
+            case h::q => val idxx = fstring_indexof(value, unit[String](h), idx)
+                         if (idxx == minusone)
+                            unit[Boolean](false)
+                         else
+                            res(q, idxx + h.length)
+            case Nil => unit[Boolean](true)
           }
-          like_t().asInstanceOf[Rep[T]]
+
+          res(token, zero).asInstanceOf[Rep[T]]
         case Substring(value, idx1, idx2) =>
           val tmp = compileExpr[Int](idx1)(rec) - 1
           fstring_substring(compileExpr[String](value)(rec), tmp, tmp + compileExpr[Int](idx2)(rec))(implicitly[SourceContext], new Overload2).asInstanceOf[Rep[T]]
