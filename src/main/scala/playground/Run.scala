@@ -627,7 +627,7 @@ object Run {
       sealed trait CondVal
       case class EquiJoin(lkey: Rep[Record] => Rep[Any], rkey: Rep[Record] => Rep[Any], man: Manifest[Any]) extends CondVal
       case class PredicateJoin(pred: (Rep[Record], Rep[Record]) => Rep[Boolean]) extends CondVal
-      case class MixedJoin(lkey: Rep[Record] => Rep[Any], rkey: Rep[Record] => Rep[Any], man: Manifest[Any], pred: (Rep[Record]) => Rep[Boolean]) extends CondVal
+      case class MixedJoin(lkey: Rep[Record] => Rep[Any], rkey: Rep[Record] => Rep[Any], man: Manifest[Any], pred: (Rep[Record], Rep[Record]) => Rep[Boolean]) extends CondVal
 
       def compileCond(cond: Option[Expression], mfl: RefinedManifest[Record], mfr: RefinedManifest[Record], forcePred: Boolean = false): CondVal = cond match {
         case Some(EqualTo(le, re)) =>
@@ -652,23 +652,23 @@ object Run {
             case (EquiJoin(llkey, rlkey, lmfk), EquiJoin(lrkey, rrkey, rmfk)) =>
               val pos = implicitly[SourceContext]
 
-              val lekey = (p: Rep[Record]) => { tup2_pack((llkey(p), lrkey(p)))(lmfk, rmfk, pos, new Overload4()) }
-              val rekey = (p: Rep[Record]) => { tup2_pack((rlkey(p), rrkey(p)))(lmfk, rmfk, pos, new Overload4()) }
+              val lekey = (p: Rep[Record]) => { tup2_pack((llkey(p), lrkey(p)))(lmfk, rmfk, pos, null) }
+              val rekey = (p: Rep[Record]) => { tup2_pack((rlkey(p), rrkey(p)))(lmfk, rmfk, pos, null) }
               val mfk = m_Tup2(lmfk, rmfk).asInstanceOf[Manifest[Any]]
               EquiJoin(lekey, rekey, mfk)
             case (EquiJoin(llkey, lrkey, lmfk), PredicateJoin(pred)) =>
-                MixedJoin(llkey, lrkey, lmfk, rec => pred(rec, rec))
+                MixedJoin(llkey, lrkey, lmfk, pred)
             case (PredicateJoin(pred), EquiJoin(rlkey, rrkey, rmfk)) =>
-              MixedJoin(rlkey, rrkey, rmfk, rec => pred(rec, rec))
+              MixedJoin(rlkey, rrkey, rmfk, pred)
             case (PredicateJoin(lpred), PredicateJoin(rpred)) =>
               PredicateJoin((l, r) => lpred(l, r) && rpred(l, r))
             case (MixedJoin(lkey, rkey, mfk, pred1), PredicateJoin(pred2)) =>
-              MixedJoin(lkey, rkey, mfk, rec => pred1(rec) && pred2(rec, rec))
+              MixedJoin(lkey, rkey, mfk, (l, r) => pred1(l, r) && pred2(l, r))
             case (MixedJoin(llkey, rlkey, lmfk, pred1), EquiJoin(lrkey, rrkey, rmfk)) =>
               val pos = implicitly[SourceContext]
 
-              val lekey = (p: Rep[Record]) => { tup2_pack((llkey(p), lrkey(p)))(lmfk, rmfk, pos, new Overload4()) }
-              val rekey = (p: Rep[Record]) => { tup2_pack((rlkey(p), rrkey(p)))(lmfk, rmfk, pos, new Overload4()) }
+              val lekey = (p: Rep[Record]) => { tup2_pack((llkey(p), lrkey(p)))(lmfk, rmfk, pos, null) }
+              val rekey = (p: Rep[Record]) => { tup2_pack((rlkey(p), rrkey(p)))(lmfk, rmfk, pos, null) }
               val mfk = m_Tup2(lmfk, rmfk).asInstanceOf[Manifest[Any]]
 
               MixedJoin(lekey, rekey, mfk, pred1)
@@ -759,6 +759,54 @@ object Run {
           EquiJoin(key, key, mfk)
       }
 
+      def leftouterjoin[A:Manifest,B:Manifest,K:Manifest,R:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K],result: (Rep[A],Rep[B]) => Rep[R], nullval: Rep[B])(implicit __pos: SourceContext): Rep[Table[R]] = {
+        val pos = implicitly[SourceContext]
+        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
+        self.SelectMany(
+          e1 => {
+            if (fhashmap_contains(grouped, k1(e1))) {
+              val buf = fhashmap_get(grouped, k1(e1))
+              Table(array_buffer_result(buf), array_buffer_length(buf)).Select(e2 => result(e1, e2))
+            } else {
+              Table(array_fromseq(Seq(result(e1, nullval))), unit[Int](1))
+            }
+          }
+        )
+      }
+
+      def leftouterjoin_pred[A:Manifest,B:Manifest,K:Manifest,R:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K],result: (Rep[A],Rep[B]) => Rep[R], pred: (Rep[A], Rep[B]) => Rep[Boolean], nullval: Rep[B])(implicit __pos: SourceContext): Rep[Table[R]] = {
+        val pos = implicitly[SourceContext]
+        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
+        self.SelectMany(
+          e1 => {
+            if (fhashmap_contains(grouped, k1(e1))) {
+              val buf = fhashmap_get(grouped, k1(e1))
+              val res = Table(array_buffer_result(buf), array_buffer_length(buf)).Where(e2 => pred(e1, e2))
+              if (table_size(res) > 0)
+                res.Select(e2 => result(e1, e2))
+              else
+                Table(array_fromseq(Seq(result(e1, nullval))), unit[Int](1))
+            } else {
+              Table(array_fromseq(Seq(result(e1, nullval))), unit[Int](1))
+            }
+          }
+        )
+      }
+
+      def leftsemijoin_pred[A:Manifest,B:Manifest,K:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K], pred: (Rep[A], Rep[B]) => Rep[Boolean])(implicit __pos: SourceContext): Rep[Table[A]] = {
+        val pos = implicitly[SourceContext]
+        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
+        self.Where(
+          e1 => {
+            if (fhashmap_contains(grouped, k1(e1))) {
+              val buf = fhashmap_get(grouped, k1(e1))
+              val res = Table(array_buffer_result(buf), array_buffer_length(buf)).Where(e2 => pred(e1, e2))
+              table_size(res) > 0
+            } else
+              unit[Boolean](false)
+          }
+        )
+      }
       def compile(d: LogicalPlan, inputs: Map[LogicalRelation,Rep[Table[Record]]]): Rep[Table[Record]] = d match {
         case Sort(sortingExpr, global, child) =>
           val res = compile(child, inputs)
@@ -1007,24 +1055,7 @@ object Run {
                       )(mfo)
                     }
                   val pos = implicitly[SourceContext]
-                  val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(resr), array_length(table_raw_data(resr))), rkey)(mfr, mfk, pos)
-                  table_selectmany(
-                    resl,
-                    {(l: Rep[Record]) =>
-                      if (fhashmap_contains(grouped, lkey(l))) {
-                        val buf = fhashmap_get(grouped, lkey(l))
-                        table_select(
-                          table_object_apply(array_buffer_result(buf), array_buffer_length(buf))(mfr, pos, new Overload3),
-                          {(r: Rep[Record]) => reskey(l, r)}
-                        )(mfr, mfo, pos)
-                      } else {
-                        table_object_apply(Seq(reskey(l, nullval)))(mfo, pos, new Overload4)
-                      }
-                    }
-                  )(mfl, mfo, pos)
-                case RightOuter =>
-                  val reskey = (l: Rep[Record], r: Rep[Record]) => r
-                  table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfl, implicitly[SourceContext])
+                  leftouterjoin(resl, resr, lkey, rkey, reskey, nullval)(mfl, mfr, mfk, mfo, pos)
                 case LeftSemi =>
                   val pos = implicitly[SourceContext]
                   val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(resr), array_length(table_raw_data(resr)))
@@ -1086,16 +1117,26 @@ object Run {
                   val pos = implicitly[SourceContext]
                   table_where(
                     table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, pos),
-                    pred
+                    (rec:Rep[Record]) => pred(rec, rec)
                   )(mfo, pos)
                 case LeftOuter =>
-                  val reskey = (l: Rep[Record], r: Rep[Record]) => l
-
-                  val pos = implicitly[SourceContext]
-                  table_where(
-                    table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfl, pos),
-                    pred
-                  )(mfl, pos)
+                  val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
+                  val nullval = nullrec(mfr.asInstanceOf[RefinedManifest[Record]])
+                  val reskey =
+                    (l: Rep[Record], r: Rep[Record]) => {
+                      record_new[Record](
+                        mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
+                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
+                        }
+                        ++
+                        mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
+                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
+                        }
+                      )(mfo)
+                    }
+                  leftouterjoin_pred(resl, resr, lkey, rkey, reskey, pred, nullval)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
+                case LeftSemi =>
+                  leftsemijoin_pred(resl, resr, lkey, rkey, pred)(mfl, mfr, mfk, implicitly[SourceContext])
                 case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
               }
           }
