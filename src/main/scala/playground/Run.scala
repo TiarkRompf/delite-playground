@@ -321,6 +321,17 @@ object Run {
         ManifestFactory.refinedType[Record](manifest[Record], names.toList, elems.toList)
       }
 
+      def isnull(value: Expression)(l: Rep[Record]): Rep[Boolean] = {
+          value.dataType match {
+            case IntegerType  => compileExpr[Int](value)(l) == intnull
+            case LongType     => compileExpr[Long](value)(l) == longnull
+            case FloatType    => compileExpr[Float](value)(l) == floatnull
+            case DoubleType   => compileExpr[Double](value)(l) == doublenull
+            case DateType     => compileExpr[Date](value)(l) == datenull
+            case StringType   => compileExpr[String](value)(l) == strnull
+          }
+      }
+
       def compileAggExpr[T:Manifest](d: AggregateFunction)(rec: Rep[Table[Record]]): Rep[T] = d match {
         case Sum(child) =>
           val res = child.dataType match {
@@ -348,15 +359,7 @@ object Run {
           }
           res.asInstanceOf[Rep[T]]
         case Count(child) =>
-          // FIXME: handle null
-          val res = child.head.dataType match {
-            case IntegerType  => rec.Sum(l => if (compileExpr[Int](child.head)(l) != intnull) 1 else 0)
-            case LongType     => rec.Sum(l => if (compileExpr[Long](child.head)(l) != longnull) 1 else 0)
-            case FloatType    => rec.Sum(l => if (compileExpr[Float](child.head)(l)!= floatnull) 1 else 0)
-            case DoubleType   => rec.Sum(l => if (compileExpr[Double](child.head)(l) != doublenull) 1 else 0)
-            case DateType     => rec.Sum(l => if (compileExpr[Date](child.head)(l) != datenull) 1 else 0)
-            case StringType   => rec.Sum(l => if (compileExpr[String](child.head)(l) != strnull) 1 else 0)
-          }
+          val res = rec.Sum(l => if (!isnull(child.head)(l)) unit[Long](1) else unit[Long](0))
           res.asInstanceOf[Rep[T]]
         case Min(child) =>
           val res = child.dataType match {
@@ -383,9 +386,19 @@ object Run {
         case _ => throw new RuntimeException("TODO: AggregateExpression, " + d.getClass.getName)
       }
 
+      def nullvalue(e: DataType): Rep[_] = e match {
+        case FloatType    => floatnull
+        case DoubleType   => doublenull
+        case IntegerType  => intnull
+        case LongType     => longnull
+        case DateType     => datenull
+        case StringType   => strnull
+      }
+
       def compileExpr[T:Manifest](d: Expression)(rec: Rep[_]): Rep[T] = d match {
         case AttributeReference(_, _, _, _) =>
           field[T](rec, getName(d))
+        case Literal(null, tpe) => nullvalue(tpe).asInstanceOf[Rep[T]]
         case Literal(value, DateType) =>
           conv_date(value.asInstanceOf[Int]).asInstanceOf[Rep[T]]
         case Literal(value, StringType) =>
@@ -560,17 +573,11 @@ object Run {
           }
           in_t().asInstanceOf[Rep[T]]
         case IsNull(value) =>
-          val res = value.dataType match {
-            case FloatType    => compileExpr[Float](value)(rec)   == floatnull
-            case DoubleType   => compileExpr[Double](value)(rec)  == doublenull
-            case IntegerType  => compileExpr[Int](value)(rec)     == intnull
-            case LongType     => compileExpr[Long](value)(rec)    == longnull
-            case DateType     => compileExpr[Date](value)(rec)    == datenull
-            case StringType   => compileExpr[String](value)(rec)  == strnull
-          }
+          val res = isnull(value)(rec.asInstanceOf[Rep[Record]])
           res.asInstanceOf[Rep[T]]
-          // FIXME: IsNull
-          // throw new RuntimeException("IsNull not supported")
+        case IsNotNull(value) =>
+          val res = !isnull(value)(rec.asInstanceOf[Rep[Record]])
+          res.asInstanceOf[Rep[T]]
         case If(cond, firstbranch, secondbranch) =>
           val res = if (compileExpr[Boolean](cond)(rec))
                       compileExpr[T](firstbranch)(rec)
