@@ -60,8 +60,9 @@ object Run {
 
   def escapeDelim(c: Char) = if (c == '|') "\\|" else c.toString
 
-  def runDelite(d : LogicalPlan, preloadData: Boolean) = {
+  def runDelite(d : LogicalPlan, preloadData: Boolean, debugf: Boolean = false) = {
     object DeliteQuery extends OptiQLApplicationCompiler with DeliteTestRunner {
+
       // ### begin modified code for groupBy fusion from hyperdsl ###
       private def hashReduce[A:Manifest,K:Manifest,T:Manifest,R:Manifest](resultSelector: Exp[T] => Exp[R], keySelector: Exp[A] => Exp[K]): Option[(Exp[A]=>Exp[R], (Exp[R],Exp[R])=>Exp[R], (Exp[R],Exp[Int])=>Exp[R])] = {
         var failed: Boolean = false
@@ -274,8 +275,6 @@ object Run {
         x.tp.typeArguments.head.asInstanceOf[Manifest[T]]
       }
 
-      def println(x: Any) = System.out.println(x)
-
       def conv_date(days: Int): Rep[Date] = {
         val c = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
         c.setTime(new java.util.Date(0)); // set origin 1970-01-01.
@@ -359,7 +358,10 @@ object Run {
           }
           res.asInstanceOf[Rep[T]]
         case Count(child) =>
-          val res = rec.Sum(l => if (!isnull(child.head)(l)) unit[Long](1) else unit[Long](0))
+          val res = child.head match {
+            case AttributeReference(_, _, _, _) => rec.Count((l: Rep[Record]) => !isnull(child.head)(l))
+            case _ => rec.Count()
+          }
           res.asInstanceOf[Rep[T]]
         case Min(child) =>
           val res = child.dataType match {
@@ -626,6 +628,7 @@ object Run {
       case class EquiJoin(lkey: Rep[Record] => Rep[Any], rkey: Rep[Record] => Rep[Any], man: Manifest[Any]) extends CondVal
       case class PredicateJoin(pred: (Rep[Record], Rep[Record]) => Rep[Boolean]) extends CondVal
       case class MixedJoin(lkey: Rep[Record] => Rep[Any], rkey: Rep[Record] => Rep[Any], man: Manifest[Any], pred: (Rep[Record], Rep[Record]) => Rep[Boolean]) extends CondVal
+      case class CartesianJoin() extends CondVal
 
       def compileCond(cond: Option[Expression], mfl: RefinedManifest[Record], mfr: RefinedManifest[Record], forcePred: Boolean = false): CondVal = cond match {
         case Some(EqualTo(le, re)) =>
@@ -752,9 +755,7 @@ object Run {
           }
         case Some(exp) => throw new RuntimeException("TODO " + exp.getClass)
         case None => // Cartesian product
-          val key = (p: Rep[Record]) => { unit[Int](1) }
-          val mfk = manifest[Int].asInstanceOf[Manifest[Any]]
-          EquiJoin(key, key, mfk)
+          CartesianJoin()
       }
 
       def leftouterjoin[A:Manifest,B:Manifest,K:Manifest,R:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K],result: (Rep[A],Rep[B]) => Rep[R], nullval: Rep[B])(implicit __pos: SourceContext): Rep[Table[R]] = {
@@ -791,393 +792,509 @@ object Run {
         )
       }
 
-      def leftsemijoin_pred[A:Manifest,B:Manifest,K:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K], pred: (Rep[A], Rep[B]) => Rep[Boolean])(implicit __pos: SourceContext): Rep[Table[A]] = {
+      def leftsemijoin[A:Manifest,B:Manifest,K:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K])(implicit __pos: SourceContext): Rep[Table[A]] = {
+        val pos = implicitly[SourceContext]
+        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
+        self.Where(e1 => fhashmap_contains(grouped, k1(e1)))
+      }
+
+      def leftantijoin[A:Manifest,B:Manifest,K:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K])(implicit __pos: SourceContext): Rep[Table[A]] = {
+        val pos = implicitly[SourceContext]
+        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
+        self.Where(e1 => !fhashmap_contains(grouped, k1(e1)))
+      }
+
+      def leftsemijoin_mixed[A:Manifest,B:Manifest,K:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K], pred: (Rep[A], Rep[B]) => Rep[Boolean])(implicit __pos: SourceContext): Rep[Table[A]] = {
         val pos = implicitly[SourceContext]
         val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
         self.Where(
           e1 => {
             if (fhashmap_contains(grouped, k1(e1))) {
               val buf = fhashmap_get(grouped, k1(e1))
-              val res = Table(array_buffer_result(buf), array_buffer_length(buf)).Where(e2 => pred(e1, e2))
-              table_size(res) > 0
+              // TODO shortcut
+              val res = Table(array_buffer_result(buf), array_buffer_length(buf)).Count((e2: Rep[B]) => pred(e1, e2))
+              res > 0
             } else
               unit[Boolean](false)
           }
         )
       }
-      def compile(d: LogicalPlan, inputs: Map[LogicalRelation,Rep[Table[Record]]]): Rep[Table[Record]] = d match {
-        case Sort(sortingExpr, global, child) =>
-          val res = compile(child, inputs)
-          val mfa = extractMF(res)
-          table_orderby(
-            res,
-            sortingExpr.map {
-              (p:Expression) => p match {
-                case SortOrder(child, order) =>
-                  child.dataType match {
-                    case FloatType =>
-                      if (order == Ascending)
-                        (x:Rep[Record], y:Rep[Record]) => {
-                          (compileExpr[Float](child)(x) - compileExpr[Float](child)(y)).toInt
-                        }
-                      else
-                        (x:Rep[Record], y:Rep[Record]) => {
-                          (compileExpr[Float](child)(y) - compileExpr[Float](child)(x)).toInt
-                        }
-                    case DoubleType =>
-                      if (order == Ascending)
-                        (x:Rep[Record], y:Rep[Record]) => {
-                          (compileExpr[Double](child)(x) - compileExpr[Double](child)(y)).toInt
-                        }
-                      else
-                        (x:Rep[Record], y:Rep[Record]) => {
-                          (compileExpr[Double](child)(y) - compileExpr[Double](child)(x)).toInt
-                        }
-                    case IntegerType =>
-                      if (order == Ascending)
-                        (x:Rep[Record], y:Rep[Record]) => {
-                          compileExpr[Int](child)(x) - compileExpr[Int](child)(y)
-                        }
-                      else
-                        (x:Rep[Record], y:Rep[Record]) => {
-                          compileExpr[Int](child)(y) - compileExpr[Int](child)(x)
-                        }
-                    case LongType =>
-                      if (order == Ascending)
-                        (x:Rep[Record], y:Rep[Record]) => {
-                          (compileExpr[Long](child)(x) - compileExpr[Long](child)(y)).toInt
-                        }
-                      else
-                        (x:Rep[Record], y:Rep[Record]) => {
-                          (compileExpr[Long](child)(y) - compileExpr[Long](child)(x)).toInt
-                        }
-                    case DateType =>
-                      if (order == Ascending)
-                        (x:Rep[Record], y:Rep[Record]) => {
-                          (date_value(compileExpr[Date](child)(x)) - date_value(compileExpr[Date](child)(y))).toInt
-                        }
-                      else
-                        (x:Rep[Record], y:Rep[Record]) => {
-                          (date_value(compileExpr[Date](child)(y)) - date_value(compileExpr[Date](child)(x))).toInt
-                        }
-                    case StringType =>
-                      if (order == Ascending)
-                        (x:Rep[Record], y:Rep[Record]) => {
-                          if (compileExpr[String](child)(x) < compileExpr[String](child)(y))
-                            unit[Int](-1)
-                          else if (compileExpr[String](child)(x) > compileExpr[String](child)(y))
-                            unit[Int](1)
-                          else
-                            unit[Int](0)
-                        }
-                      else
-                        (x:Rep[Record], y:Rep[Record]) => {
-                          if (compileExpr[String](child)(x) < compileExpr[String](child)(y))
-                            unit[Int](1)
-                          else if (compileExpr[String](child)(x) > compileExpr[String](child)(y))
-                            unit[Int](-1)
-                          else
-                            unit[Int](0)
-                        }
-                  }
-                case _ => throw new RuntimeException("Sorting Expression " + p.getClass + " not supported")
-              }
+
+      def leftantijoin_mixed[A:Manifest,B:Manifest,K:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K], pred: (Rep[A], Rep[B]) => Rep[Boolean])(implicit __pos: SourceContext): Rep[Table[A]] = {
+        val pos = implicitly[SourceContext]
+        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
+        self.Where(
+          e1 => {
+            if (fhashmap_contains(grouped, k1(e1))) {
+              val buf = fhashmap_get(grouped, k1(e1))
+              // TODO shortcut
+              val res = Table(array_buffer_result(buf), array_buffer_length(buf)).Count((e2: Rep[B]) => pred(e1, e2))
+              res == 0
+            } else
+              unit[Boolean](true)
+          }
+        )
+      }
+
+      def leftsemijoin_pred[A:Manifest,B:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]], pred: (Rep[A], Rep[B]) => Rep[Boolean])(implicit __pos: SourceContext): Rep[Table[A]] = {
+        val pos = implicitly[SourceContext]
+        self.Where(
+          e1 => {
+              // TODO shortcut
+              val res = t2.Count((e2: Rep[B]) => pred(e1, e2))
+              res == 0
+          }
+        )
+      }
+
+      def join2_imple[A:Manifest,B:Manifest,K:Manifest,R:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K],result: (Rep[A],Rep[B]) => Rep[R])(implicit __pos: SourceContext): Rep[Table[R]] = {
+        val sself = table_size(self)
+        val st2 = table_size(t2)
+        println("Tables size: " + sself + " : " + st2)
+        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
+        val empty = Table(array_empty_imm[R](unit(0)))
+        val sol = self.SelectMany(e1 => {
+          if (fhashmap_contains(grouped, k1(e1))) {
+            val buf = fhashmap_get(grouped, k1(e1))
+            Table(array_buffer_unsafe_result(buf), array_buffer_length(buf)).Select(e2 => result(e1,e2))
+          }
+          else empty
+        })
+        sol
+      }
+
+      def cartesian_join[A:Manifest,B:Manifest,R:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],result: (Rep[A],Rep[B]) => Rep[R])(implicit __pos: SourceContext): Rep[Table[R]] = {
+        val sself = table_size(self)
+        val st2 = table_size(t2)
+        val res = self.SelectMany(e1 => t2.Select(e2 => result(e1, e2)))
+        res
+      }
+
+
+      def getTag(d: LogicalPlan) = d match {
+          case LogicalRelation(relation, x) =>
+            relation match {
+              case relation: CsvRelation => relation.location
+              case _ => "TODO"
             }
-          )(mfa, implicitly[SourceContext])
-        case Aggregate(groupingExpr, aggregateExpr, child) =>
-          val res = compile(child, inputs)
+          case _ => d.simpleString
+      }
 
-          if (aggregateExpr.length == 0)
-            return res
-
-          val mfa = extractMF(res)
-          val pos = implicitly[SourceContext]
-          val mfo = ManifestFactory.refinedType[Record](
-                  manifest[Record],
-                  aggregateExpr.map {p => getName(p)}.toList,
-                  aggregateExpr.map { (p:Expression) =>
-                      convertType(p)}.toList )
-
-          if (groupingExpr.length == 0) {
-            table_object_apply(
-              Seq(
-                record_new[Record](
-                  aggregateExpr.map { (p:Expression) =>
-                    val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                    (getName(p), false, (x:Any) => compileExpr[Any](p)(res)(mfp))
-                  }
-                )(mfo)
-              )
-            )(mfo, pos, null)
-          } else {
-
-            val mfk = ManifestFactory.refinedType[Record](
-                    manifest[Record],
-                    groupingExpr.map {p => getName(p)}.toList,
-                    groupingExpr.map { (p:Expression) =>
-                        convertType(p).asInstanceOf[Manifest[_]]}.toList).asInstanceOf[Manifest[Any]]
-
-            val group = table_groupby(
+      def compile(d: LogicalPlan, inputs: Map[LogicalRelation,Rep[Table[Record]]], tag: String): Rep[Table[Record]] = {
+        if (debugf) tic(tag + getTag(d))
+        val sol = d match {
+          case Sort(sortingExpr, global, child) =>
+            val res = compile(child, inputs, "=" + tag)
+            val mfa = extractMF(res)
+            table_orderby(
               res,
-              {(rec:Rep[Record]) =>
-              record_new(
-                groupingExpr.map {
-                  (p:Expression) =>
-                    val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                    (getName(p), false, {(x:Any) => compileExpr[Any](p)(rec)(mfp)})
+              sortingExpr.map {
+                (p:Expression) => p match {
+                  case SortOrder(child, order) =>
+                    child.dataType match {
+                      case FloatType =>
+                        if (order == Ascending)
+                          (x:Rep[Record], y:Rep[Record]) => {
+                            if (compileExpr[Float](child)(x) < compileExpr[Float](child)(y))
+                              unit[Int](-1)
+                            else if (compileExpr[Float](child)(x) > compileExpr[Float](child)(y))
+                              unit[Int](1)
+                            else
+                              unit[Int](0)
+                          }
+                        else
+                          (x:Rep[Record], y:Rep[Record]) => {
+                            if (compileExpr[Float](child)(x) < compileExpr[Float](child)(y))
+                              unit[Int](1)
+                            else if (compileExpr[Float](child)(x) > compileExpr[Float](child)(y))
+                              unit[Int](-1)
+                            else
+                              unit[Int](0)
+                          }
+                      case DoubleType =>
+                        if (order == Ascending)
+                          (x:Rep[Record], y:Rep[Record]) => {
+                            if (compileExpr[Double](child)(x) < compileExpr[Double](child)(y))
+                              unit[Int](-1)
+                            else if (compileExpr[Double](child)(x) > compileExpr[Double](child)(y))
+                              unit[Int](1)
+                            else
+                              unit[Int](0)
+                          }
+                        else
+                          (x:Rep[Record], y:Rep[Record]) => {
+                            if (compileExpr[Double](child)(x) < compileExpr[Double](child)(y))
+                              unit[Int](1)
+                            else if (compileExpr[Double](child)(x) > compileExpr[Double](child)(y))
+                              unit[Int](-1)
+                            else
+                              unit[Int](0)
+                          }
+                      case IntegerType =>
+                        if (order == Ascending)
+                          (x:Rep[Record], y:Rep[Record]) => {
+                            compileExpr[Int](child)(x) - compileExpr[Int](child)(y)
+                          }
+                        else
+                          (x:Rep[Record], y:Rep[Record]) => {
+                            compileExpr[Int](child)(y) - compileExpr[Int](child)(x)
+                          }
+                      case LongType =>
+                        if (order == Ascending)
+                          (x:Rep[Record], y:Rep[Record]) => {
+                            (compileExpr[Long](child)(x) - compileExpr[Long](child)(y)).toInt
+                          }
+                        else
+                          (x:Rep[Record], y:Rep[Record]) => {
+                            (compileExpr[Long](child)(y) - compileExpr[Long](child)(x)).toInt
+                          }
+                      case DateType =>
+                        if (order == Ascending)
+                          (x:Rep[Record], y:Rep[Record]) => {
+                            (date_value(compileExpr[Date](child)(x)) - date_value(compileExpr[Date](child)(y))).toInt
+                          }
+                        else
+                          (x:Rep[Record], y:Rep[Record]) => {
+                            (date_value(compileExpr[Date](child)(y)) - date_value(compileExpr[Date](child)(x))).toInt
+                          }
+                      case StringType =>
+                        if (order == Ascending)
+                          (x:Rep[Record], y:Rep[Record]) => {
+                            if (compileExpr[String](child)(x) < compileExpr[String](child)(y))
+                              unit[Int](-1)
+                            else if (compileExpr[String](child)(x) > compileExpr[String](child)(y))
+                              unit[Int](1)
+                            else
+                              unit[Int](0)
+                          }
+                        else
+                          (x:Rep[Record], y:Rep[Record]) => {
+                            val left = compileExpr[String](child)(x)
+                            val right = compileExpr[String](child)(y)
+                            println("Compare: " + left + " and " + right)
+                            if (compileExpr[String](child)(x) < compileExpr[String](child)(y))
+                              unit[Int](1)
+                            else if (compileExpr[String](child)(x) > compileExpr[String](child)(y))
+                              unit[Int](-1)
+                            else
+                              unit[Int](0)
+                          }
+                    }
+                  case _ => throw new RuntimeException("Sorting Expression " + p.getClass + " not supported")
                 }
-              )(mfk)
               }
-            )(mfa, mfk, pos)
+            )(mfa, implicitly[SourceContext])
+          case Aggregate(groupingExpr, aggregateExpr, child) =>
+            val res = compile(child, inputs, "=" + tag)
 
+            if (aggregateExpr.length == 0)
+              return res
 
-            val mfg = extractMF(group)
-            val tmp = table_select(
-                group,
-                { (coup:Rep[Tup2[Any, Table[Record]]]) =>
-                  val key = tup2__1(coup)(mfk, pos)
-                  val tab = tup2__2(coup)(res.tp.asInstanceOf[Manifest[Table[Record]]],pos)
-                  val tmp = record_new[Record](aggregateExpr.map {
-                    (p:NamedExpression) =>
-                      val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                      p match {
-                        case AttributeReference(_, _, _, _) =>
-                          (getName(p), false, {(x:Any) => compileExpr[Any](p)(key)(mfp)})
-                        case _ =>
-                          (getName(p), false, {(x:Any) => compileExpr[Any](p)(tab)(mfp)})
-                      }
-                  })(mfo)
-                  tmp
-                }
-               )(mfg, mfo, pos)
-            tmp
-          }
+            val mfa = extractMF(res)
+            val pos = implicitly[SourceContext]
+            val mfo = ManifestFactory.refinedType[Record](
+                    manifest[Record],
+                    aggregateExpr.map {p => getName(p)}.toList,
+                    aggregateExpr.map { (p:Expression) =>
+                        convertType(p)}.toList )
 
-        case Project(projectList, child) =>
-          val res = compile(child, inputs)
-
-          // TODO handle distinc select
-
-          if (projectList.length == 0)
-            return res
-
-
-          val mfb = extractMF(res)
-          val mfa = ManifestFactory.refinedType[Record](
-                  manifest[Record],
-                  projectList.map {p => getName(p)}.toList,
-                  projectList.map { (p:NamedExpression) =>
-                      convertType(p)}.toList )
-          table_select(
-            res,
-            { (rec:Rep[Record]) =>
-              record_new[Record](projectList.map {
-                (p:NamedExpression) => val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                  (getName(p), false, (x:Any) => compileExpr[Any](p)(rec)(mfp))
-                }
-              )(mfa)
-            }
-          )(mfb, mfa, implicitly[SourceContext])
-        case Filter(condition, child) =>
-          val res = compile(child, inputs)
-          val mf = extractMF(res)
-          table_where(res, { (rec:Rep[Record]) =>
-            compileExpr[Boolean](condition)(rec)
-          })(mf, implicitly[SourceContext])
-        case Limit(value, child) =>
-          val res = compile(child, inputs)
-          res
-        //case a: LeafNode if a.getClass.getName == lgr =>
-        case a@LogicalRelation(relation, x) =>
-          // class LogicalRelation is private, so we use reflection
-          // to get around access control
-          // val fld = a.getClass.getDeclaredFields.filter(_.getName == "relation").head
-          // fld.setAccessible(true)
-          // val relation = fld.get(a).asInstanceOf[BaseRelation]
-          relation match {
-            case relation: CsvRelation =>
-              //println("schema:")
-              //println(relation.schema)
-              /*
-              println("got it: ")
-              println(relation)
-              println("location:")
-              println(relation.location)
-              println("delimiter:")
-              println(relation.delimiter)
-               */
-              if (preloadData) inputs(a) else {
-                trait TYPE
-                implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
-                Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]]
-              }
-          }
-        case Join(left, right, tpe, cond) =>
-          val resl = compile(left, inputs)
-          val resr = compile(right, inputs)
-
-          val mfl = extractMF(resl)
-          val mfr = extractMF(resr)
-          compileCond(cond, mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]]) match {
-            case EquiJoin(lkey, rkey, mfk) =>
-              tpe match {
-                case Inner =>
-                  val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
-                  val reskey =
-                    (l: Rep[Record], r: Rep[Record]) => {
-                      record_new[Record](
-                        mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
-                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
-                        }
-                        ++
-                        mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
-                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
-                        }
-                      )(mfo)
-                    }
-
-                  table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
-                case LeftOuter =>
-                  val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
-                  val nullval = nullrec(mfr.asInstanceOf[RefinedManifest[Record]])
-                  val reskey =
-                    (l: Rep[Record], r: Rep[Record]) => {
-                      record_new[Record](
-                        mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
-                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
-                        }
-                        ++
-                        mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
-                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
-                        }
-                      )(mfo)
-                    }
-                  val pos = implicitly[SourceContext]
-                  leftouterjoin(resl, resr, lkey, rkey, reskey, nullval)(mfl, mfr, mfk, mfo, pos)
-                case LeftSemi =>
-                  val pos = implicitly[SourceContext]
-                  val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(resr), array_length(table_raw_data(resr)))
-, rkey)(mfr, mfk, pos)
-                  table_where(
-                    resl,
-                    (l: Rep[Record]) => fhashmap_contains(grouped, lkey(l))
-                  )(mfl, pos)
-                case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
-              }
-            case PredicateJoin(pred) =>
-              tpe match {
-                case Inner =>
-                  val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
-                  val reskey =
-                    (l: Rep[Record], r: Rep[Record]) => {
-                      record_new[Record](
-                        mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
-                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
-                        }
-                        ++
-                        mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
-                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
-                        }
-                      )(mfo)
-                    }
-                  val pos = implicitly[SourceContext]
-                  table_selectmany(
-                    resl,
-                    {(l: Rep[Record]) =>
-                      table_select(
-                        table_where(
-                          resr,
-                          {(r: Rep[Record]) => pred(l, r)}
-                        )(mfr, pos),
-                        {(r: Rep[Record]) => reskey(l, r)}
-                      )(mfr, mfo, pos)
-                    }
-                  )(mfl, mfo, pos)
-              }
-            case MixedJoin(lkey, rkey, mfk, pred) =>
-              tpe match {
-                case Inner =>
-                  val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
-                  val reskey =
-                    (l: Rep[Record], r: Rep[Record]) => {
-                      record_new[Record](
-                        mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
-                          case (name, _) =>
-                            (name, false, (x:Rep[Record]) => field[Any](l, name))
-                        }
-                        ++
-                        mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
-                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
-                        }
-                      )(mfo)
-                    }
-
-                  val pos = implicitly[SourceContext]
-                  table_where(
-                    table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, pos),
-                    (rec:Rep[Record]) => pred(rec, rec)
-                  )(mfo, pos)
-                case LeftOuter =>
-                  val mfo = appendMan(mfl.asInstanceOf[RefinedManifest[Record]], mfr.asInstanceOf[RefinedManifest[Record]])
-                  val nullval = nullrec(mfr.asInstanceOf[RefinedManifest[Record]])
-                  val reskey =
-                    (l: Rep[Record], r: Rep[Record]) => {
-                      record_new[Record](
-                        mfl.asInstanceOf[RefinedManifest[Record]].fields.map {
-                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
-                        }
-                        ++
-                        mfr.asInstanceOf[RefinedManifest[Record]].fields.map {
-                          case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
-                        }
-                      )(mfo)
-                    }
-                  leftouterjoin_pred(resl, resr, lkey, rkey, reskey, pred, nullval)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
-                case LeftSemi =>
-                  leftsemijoin_pred(resl, resr, lkey, rkey, pred)(mfl, mfr, mfk, implicitly[SourceContext])
-                case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
-              }
-          }
-        case a if a.getClass.getName == expcl =>
-          val flp = a.getClass.getDeclaredFields.filter(_.getName == "projections").head
-          flp.setAccessible(true)
-          val projections = flp.get(a).asInstanceOf[Seq[Seq[Expression]]]
-          val flo = a.getClass.getDeclaredFields.filter(_.getName == "output").head
-          flo.setAccessible(true)
-          val output = flo.get(a).asInstanceOf[Seq[Expression]]
-          val flc = a.getClass.getDeclaredFields.filter(_.getName == "child").head
-          flc.setAccessible(true)
-          val child = flc.get(a).asInstanceOf[LogicalPlan]
-          val res = compile(child, inputs)
-
-          val mfa = extractMF(res)
-          val mfo = ManifestFactory.refinedType[Record](
-                  manifest[Record],
-                  output.map {p => getName(p)}.toList,
-                  output.toList.map { (p:Expression) =>
-                      convertType(p)}.toList ).asInstanceOf[Manifest[Any]]
-
-          val pos = implicitly[SourceContext]
-          val tres = table_selectmany(
-            res,
-            {(rec: Rep[Record]) =>
+            if (groupingExpr.length == 0) {
               table_object_apply(
-                projections.map {
-                  case (proj: Seq[Expression]) =>
-                    record_new(
-                      proj.zip(output).map {
-                        case (p:Expression, q: Expression) => {
-                          val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                          (getName(q), false, (x:Any) => compileExpr[Any](p)(rec)(mfp))
+                Seq(
+                  record_new[Record](
+                    aggregateExpr.map { (p:Expression) =>
+                      val mfp = convertType(p).asInstanceOf[Manifest[Any]]
+                      (getName(p), false, (x:Any) => compileExpr[Any](p)(res)(mfp))
+                    }
+                  )(mfo)
+                )
+              )(mfo, pos, null)
+            } else {
+
+              val mfk = ManifestFactory.refinedType[Record](
+                      manifest[Record],
+                      groupingExpr.map {p => getName(p)}.toList,
+                      groupingExpr.map { (p:Expression) =>
+                          convertType(p).asInstanceOf[Manifest[_]]}.toList).asInstanceOf[Manifest[Any]]
+
+              val group = table_groupby(
+                res,
+                {(rec:Rep[Record]) =>
+                record_new(
+                  groupingExpr.map {
+                    (p:Expression) =>
+                      val mfp = convertType(p).asInstanceOf[Manifest[Any]]
+                      (getName(p), false, {(x:Any) => compileExpr[Any](p)(rec)(mfp)})
+                  }
+                )(mfk)
+                }
+              )(mfa, mfk, pos)
+
+
+              val mfg = extractMF(group)
+              val tmp = table_select(
+                  group,
+                  { (coup:Rep[Tup2[Any, Table[Record]]]) =>
+                    val key = tup2__1(coup)(mfk, pos)
+                    val tab = tup2__2(coup)(res.tp.asInstanceOf[Manifest[Table[Record]]],pos)
+                    val tmp = record_new[Record](aggregateExpr.map {
+                      (p:NamedExpression) =>
+                        val mfp = convertType(p).asInstanceOf[Manifest[Any]]
+                        p match {
+                          case AttributeReference(_, _, _, _) =>
+                            (getName(p), false, {(x:Any) => compileExpr[Any](p)(key)(mfp)})
+                          case _ =>
+                            (getName(p), false, {(x:Any) => compileExpr[Any](p)(tab)(mfp)})
                         }
+                    })(mfo)
+                    tmp
+                  }
+                 )(mfg, mfo, pos)
+              tmp
+            }
+
+          case Project(projectList, child) =>
+            val res = compile(child, inputs, "=" + tag)
+
+            // TODO handle distinc select
+
+            if (projectList.length == 0)
+              return res
+
+
+            val mfb = extractMF(res)
+            val mfa = ManifestFactory.refinedType[Record](
+                    manifest[Record],
+                    projectList.map {p => getName(p)}.toList,
+                    projectList.map { (p:NamedExpression) =>
+                        convertType(p)}.toList )
+            table_select(
+              res,
+              { (rec:Rep[Record]) =>
+                record_new[Record](projectList.map {
+                  (p:NamedExpression) => val mfp = convertType(p).asInstanceOf[Manifest[Any]]
+                    (getName(p), false, (x:Any) => compileExpr[Any](p)(rec)(mfp))
+                  }
+                )(mfa)
+              }
+            )(mfb, mfa, implicitly[SourceContext])
+          case Filter(condition, child) =>
+            val res = compile(child, inputs, "=" + tag)
+            val mf = extractMF(res)
+            table_where(res, { (rec:Rep[Record]) =>
+              compileExpr[Boolean](condition)(rec)
+            })(mf, implicitly[SourceContext])
+          case Limit(value, child) =>
+            val res = compile(child, inputs, "=" + tag)
+            res
+          case a@LogicalRelation(relation, x) =>
+            relation match {
+              case relation: CsvRelation =>
+                if (preloadData) inputs(a) else {
+                  trait TYPE
+                  implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
+                  Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]]
+                }
+            }
+          case Join(left, right, tpe, cond) =>
+            val resl = compile(left, inputs, "L" + tag)
+            val resr = compile(right, inputs, "R" + tag)
+
+            val mfl = extractMF(resl)
+            val mfr = extractMF(resr)
+            val mfl_rec = mfl.asInstanceOf[RefinedManifest[Record]]
+            val mfr_rec = mfr.asInstanceOf[RefinedManifest[Record]]
+
+            val res = compileCond(cond, mfl_rec, mfr_rec) match {
+              case EquiJoin(lkey, rkey, mfk) =>
+                tpe match {
+                  case Inner =>
+                    val mfo = appendMan(mfl_rec, mfr_rec)
+                    val reskey =
+                      (l: Rep[Record], r: Rep[Record]) => {
+                        record_new[Record](
+                          mfl_rec.fields.map {
+                            case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
+                          }
+                          ++
+                          mfr_rec.fields.map {
+                            case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
+                          }
+                        )(mfo)
+                      }
+
+                    table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
+                  case LeftOuter =>
+                    val mfo = appendMan(mfl_rec, mfr_rec)
+                    val nullval = nullrec(mfr_rec)
+                    val reskey =
+                      (l: Rep[Record], r: Rep[Record]) => {
+                        record_new[Record](
+                          mfl_rec.fields.map {
+                            case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
+                          }
+                          ++
+                          mfr_rec.fields.map {
+                            case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
+                          }
+                        )(mfo)
+                      }
+                    val pos = implicitly[SourceContext]
+                    leftouterjoin(resl, resr, lkey, rkey, reskey, nullval)(mfl, mfr, mfk, mfo, pos)
+                  case LeftSemi =>
+                    leftsemijoin(resl, resr, lkey, rkey)(mfl, mfr, mfk, implicitly[SourceContext])
+                  case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
+                }
+              case PredicateJoin(pred) =>
+                tpe match {
+                  case Inner =>
+                    val mfo = appendMan(mfl_rec, mfr_rec)
+                    val reskey =
+                      (l: Rep[Record], r: Rep[Record]) => {
+                        record_new[Record](
+                          mfl_rec.fields.map {
+                            case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
+                          }
+                          ++
+                          mfr_rec.fields.map {
+                            case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
+                          }
+                        )(mfo)
+                      }
+                    val pos = implicitly[SourceContext]
+                    table_selectmany(
+                      resl,
+                      {(l: Rep[Record]) =>
+                        table_select(
+                          table_where(
+                            resr,
+                            {(r: Rep[Record]) => pred(l, r)}
+                          )(mfr, pos),
+                          {(r: Rep[Record]) => reskey(l, r)}
+                        )(mfr, mfo, pos)
+                      }
+                    )(mfl, mfo, pos)
+                  case LeftSemi =>
+                    cond match {
+                      // TODO: catch it sooner
+                      case Some(Not(exp)) => compileCond(Some(exp), mfl_rec, mfr_rec) match {
+                        case EquiJoin(lkey, rkey, mfk) =>
+                          leftantijoin(resl, resr, lkey, rkey)(mfl, mfr, mfk, implicitly[SourceContext])
+                        case _ => throw new RuntimeException("TODO: convert semi  join to anti join Some(Not(exp))")
+                      }
+                      case Some(Or(Not(le), re)) => compileCond(Some(And(le, Not(re))), mfl_rec, mfr_rec) match {
+                        case EquiJoin(lkey, rkey, mfk) =>
+                          leftantijoin(resl, resr, lkey, rkey)(mfl, mfr, mfk, implicitly[SourceContext])
+                        case MixedJoin(lkey, rkey, mfk, pred) =>
+                          leftantijoin_mixed(resl, resr, lkey, rkey, pred)(mfl, mfr, mfk, implicitly[SourceContext])
+                        case _ => throw new RuntimeException("TODO: convert semi  join to anti join Some(Or(Not(),))")
+                      }
+                      case _  => leftsemijoin_pred(resl, resr, pred)(mfl, mfr, implicitly[SourceContext])
+                    }
+                }
+              case MixedJoin(lkey, rkey, mfk, pred) =>
+                tpe match {
+                  case Inner =>
+                    val mfo = appendMan(mfl_rec, mfr_rec)
+                    val reskey =
+                      (l: Rep[Record], r: Rep[Record]) => {
+                        record_new[Record](
+                          mfl_rec.fields.map {
+                            case (name, _) =>
+                              (name, false, (x:Rep[Record]) => field[Any](l, name))
+                          }
+                          ++
+                          mfr_rec.fields.map {
+                            case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
+                          }
+                        )(mfo)
+                      }
+
+                    val pos = implicitly[SourceContext]
+                    table_where(
+                      table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, pos),
+                      (rec:Rep[Record]) => pred(rec, rec)
+                    )(mfo, pos)
+                  case LeftOuter =>
+                    val mfo = appendMan(mfl_rec, mfr_rec)
+                    val nullval = nullrec(mfr_rec)
+                    val reskey =
+                      (l: Rep[Record], r: Rep[Record]) => {
+                        record_new[Record](
+                          mfl_rec.fields.map {
+                            case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
+                          }
+                          ++
+                          mfr_rec.fields.map {
+                            case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
+                          }
+                        )(mfo)
+                      }
+                    leftouterjoin_pred(resl, resr, lkey, rkey, reskey, pred, nullval)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
+                  case LeftSemi =>
+                    leftsemijoin_mixed(resl, resr, lkey, rkey, pred)(mfl, mfr, mfk, implicitly[SourceContext])
+                  case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
+                }
+              case CartesianJoin() =>
+                val mfo = appendMan(mfl_rec, mfr_rec)
+                val reskey =
+                  (l: Rep[Record], r: Rep[Record]) => {
+                    record_new[Record](
+                      mfl_rec.fields.map {
+                        case (name, _) => (name, false, (x:Rep[Record]) => field[Any](l, name))
+                      }
+                      ++
+                      mfr_rec.fields.map {
+                        case (name, _) => (name, false, (x:Rep[Record]) => field[Any](r, name))
                       }
                     )(mfo)
-                }.toSeq
-              )(mfo, pos, new Overload4)
-           }
-          )(mfa, mfo, pos)
-          tres.asInstanceOf[Rep[Table[Record]]]
-        case _ => throw new RuntimeException("unknown query operator: " + d.getClass)
+                  }
+                cartesian_join(resl, resr, reskey)(mfl, mfr, mfo, implicitly[SourceContext])
+            }
+            res
+          case a if a.getClass.getName == expcl =>
+            val flp = a.getClass.getDeclaredFields.filter(_.getName == "projections").head
+            flp.setAccessible(true)
+            val projections = flp.get(a).asInstanceOf[Seq[Seq[Expression]]]
+            val flo = a.getClass.getDeclaredFields.filter(_.getName == "output").head
+            flo.setAccessible(true)
+            val output = flo.get(a).asInstanceOf[Seq[Expression]]
+            val flc = a.getClass.getDeclaredFields.filter(_.getName == "child").head
+            flc.setAccessible(true)
+            val child = flc.get(a).asInstanceOf[LogicalPlan]
+            val res = compile(child, inputs, "=" + tag)
+
+            val mfa = extractMF(res)
+            val mfo = ManifestFactory.refinedType[Record](
+                    manifest[Record],
+                    output.map {p => getName(p)}.toList,
+                    output.toList.map { (p:Expression) =>
+                        convertType(p)}.toList ).asInstanceOf[Manifest[Any]]
+
+            val pos = implicitly[SourceContext]
+            val tres = table_selectmany(
+              res,
+              {(rec: Rep[Record]) =>
+                table_object_apply(
+                  projections.map {
+                    case (proj: Seq[Expression]) =>
+                      record_new(
+                        proj.zip(output).map {
+                          case (p:Expression, q: Expression) => {
+                            val mfp = convertType(p).asInstanceOf[Manifest[Any]]
+                            (getName(q), false, (x:Any) => compileExpr[Any](p)(rec)(mfp))
+                          }
+                        }
+                      )(mfo)
+                  }.toSeq
+                )(mfo, pos, new Overload4)
+             }
+            )(mfa, mfo, pos)
+            tres.asInstanceOf[Rep[Table[Record]]]
+          case _ => throw new RuntimeException("unknown query operator: " + d.getClass)
+        }
+        if (debugf) toc(tag + getTag(d), sol)
+        sol
       }
 
       def preload(d: LogicalPlan): Map[LogicalRelation,Rep[Table[Record]]] = d match {
@@ -1194,18 +1311,8 @@ object Run {
         case a@LogicalRelation(relation, _) =>
           relation match {
             case relation: CsvRelation =>
-              //println("schema:")
-              //println(relation.schema)
-              /*
-              println("got it: ")
-              println(relation)
-              println("location:")
-              println(relation.location)
-              println("delimiter:")
-              println(relation.delimiter)
-               */
               trait TYPE
-                implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
+              implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
               Map(a -> Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]])
           }
         case Join(left, right, tpe, cond) =>
@@ -1233,11 +1340,11 @@ object Run {
           tic("load")
           inputs = preload(d)
           toc("load", inputs.toSeq.map(_._2.size):_*)
-          println("preload: " + inputs.map(_._1).mkString(","))
+          println("preload: Done")
           tic("exec", inputs.toSeq.map(_._2.size):_*)
         }
 
-        val res = compile(d, inputs)
+        val res = compile(d, inputs, "> ")
         System.out.println("Compiled")
 
         if (preloadData) {

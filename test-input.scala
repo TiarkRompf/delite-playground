@@ -1,6 +1,6 @@
 // test -- this can be run from the repl
 
-val folder = sys.env("DELITE_PLAY") + "/data/SF1/"
+val folder = sys.env("DELITE_PLAY") + "/data/SF10/"
 // val file = folder + "tpch_2_17_0/dbgen/lineitem.tbl"
 val file_part = folder + "part.tbl"
 val file_supplier = folder + "supplier.tbl"
@@ -1196,12 +1196,12 @@ def testSpark(s: String) = {
   res.show()
 }
 
-def testDelite(s: String, preloadData: Boolean = false) = {
+def testDelite(s: String, preloadData: Boolean = false, debug: Boolean = false) = {
   val res = sqlContext.sql(s)
 
   System.out.println(res.queryExecution.optimizedPlan)
 
-  Run.runDelite(res.queryExecution.optimizedPlan, preloadData)
+  Run.runDelite(res.queryExecution.optimizedPlan, preloadData, debug)
 }
 
 ppl.delite.framework.Config.debug = true
