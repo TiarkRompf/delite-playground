@@ -126,6 +126,7 @@ object DeliteRunner extends DeliteTestConfig {
         }
         val outStr = execTest(app, args, target, num)
         checkTest(app, outStr)
+        System.gc()
       }
     }
   }
@@ -138,7 +139,7 @@ object DeliteRunner extends DeliteTestConfig {
     val generatedDir = (new File("generated")).getAbsolutePath + /*protobuf wants absolute path*/
       java.io.File.separator + uniqueTestName
     try {
-      Config.degFilename = degName 
+      Config.degFilename = degName
       Config.buildDir = generatedDir
       Config.cacheSyms = cacheSyms
       //Config.generateCUDA = true
@@ -153,8 +154,8 @@ object DeliteRunner extends DeliteTestConfig {
         }
         //assert(!app.hadErrors) //TR should enable this check at some time ...
       }
-    } finally { 
-      // concurrent access check 
+    } finally {
+      // concurrent access check
       assert(Config.buildDir == generatedDir)
       Config.degFilename = save
       Config.buildDir = buildDir
@@ -215,7 +216,7 @@ trait DeliteTestRunner extends DeliteTestModule with DeliteTestConfig with Delit
     delite_test_bw_write(out, s2)
     delite_test_bw_close(out)*/
   }
-  
+
 }
 
 trait DeliteTestModule extends Base {

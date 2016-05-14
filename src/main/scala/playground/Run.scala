@@ -610,20 +610,6 @@ object Run {
         case _ => true
       }
 
-      // TODO: for non-equijoin conditions (e.g. >), return a predicate that will be used as filter after the join
-      // TODO: for Or, generate a nested loop join
-
-      // def compileUnsupported(cond: Expression, mfl: RefinedManifest[Record], mfr: RefinedManifest[Record]): (Rep[Record] => Rep[Any], Rep[Record] => Rep[Any], Manifest[Any]) = cond match {
-      //   case EqualTo(le, re) =>
-      //     val predicate = (p: Rep[Record]) => { compileExpr[Any](le)(p)(mfk) }
-      //   case And(le, re) =>
-      //   case Or(le ,re) =>
-
-      //   case Not(e) =>
-      //     throw new RuntimeException("Join: unsupported operation " + value.getClass.getName)
-
-      // }
-
       sealed trait CondVal
       case class EquiJoin(lkey: Rep[Record] => Rep[Any], rkey: Rep[Record] => Rep[Any], man: Manifest[Any]) extends CondVal
       case class PredicateJoin(pred: (Rep[Record], Rep[Record]) => Rep[Boolean]) extends CondVal
@@ -848,9 +834,6 @@ object Run {
       }
 
       def join2_imple[A:Manifest,B:Manifest,K:Manifest,R:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K],result: (Rep[A],Rep[B]) => Rep[R])(implicit __pos: SourceContext): Rep[Table[R]] = {
-        val sself = table_size(self)
-        val st2 = table_size(t2)
-        println("Tables size: " + sself + " : " + st2)
         val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
         val empty = Table(array_empty_imm[R](unit(0)))
         val sol = self.SelectMany(e1 => {
@@ -971,7 +954,6 @@ object Run {
                           (x:Rep[Record], y:Rep[Record]) => {
                             val left = compileExpr[String](child)(x)
                             val right = compileExpr[String](child)(y)
-                            println("Compare: " + left + " and " + right)
                             if (compileExpr[String](child)(x) < compileExpr[String](child)(y))
                               unit[Int](1)
                             else if (compileExpr[String](child)(x) > compileExpr[String](child)(y))
@@ -1123,7 +1105,7 @@ object Run {
                         )(mfo)
                       }
 
-                    table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
+                    join2_imple(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
                   case LeftOuter =>
                     val mfo = appendMan(mfl_rec, mfr_rec)
                     val nullval = nullrec(mfr_rec)
@@ -1212,7 +1194,7 @@ object Run {
 
                     val pos = implicitly[SourceContext]
                     table_where(
-                      table_join(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, pos),
+                      join2_imple(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, pos),
                       (rec:Rep[Record]) => pred(rec, rec)
                     )(mfo, pos)
                   case LeftOuter =>
