@@ -28,15 +28,15 @@ libraryDependencies += "stanford-ppl" %% "runtime" % "0.1-SNAPSHOT"
 
 libraryDependencies += "stanford-ppl" %% "optiql" % "0.1-SNAPSHOT"
 
-libraryDependencies += "org.apache.spark" %% "spark-core" % "1.6.0"
+libraryDependencies += "org.apache.spark" %% "spark-core" % "2.0.0"
 
-libraryDependencies += "org.apache.spark" %% "spark-sql" % "1.6.0"
+libraryDependencies += "org.apache.spark" %% "spark-sql" % "2.0.0"
 
 libraryDependencies += "com.databricks" %% "spark-csv" % "1.2.0"
 
-//libraryDependencies += "com.google.protobuf" % "protobuf-java" % "2.4.1"
+// libraryDependencies += "com.google.protobuf" % "protobuf-java" % "2.4.1"
 
-libraryDependencies += "com.google.guava" % "guava" % "14.0.1"
+// libraryDependencies += "com.google.guava" % "guava" % "14.0.1"
 
 // do not include repl scripts in assembly
 sourcesInBase := false
@@ -52,12 +52,15 @@ mergeStrategy in assembly <<= (mergeStrategy in assembly) { (old) =>
     case "library.properties" => MergeStrategy.last
     case "reflect.properties" => MergeStrategy.last
     case "scaladoc.properties" => MergeStrategy.last
+    case PathList("org", "aopalliance", xs @ _*) => MergeStrategy.last
     case "repl.properties" => MergeStrategy.last
     case PathList("com", "google", "common", xs @ _*) => MergeStrategy.last
     /* --- */
     case PathList("javax", "servlet", xs @ _*) => MergeStrategy.last
+    case PathList("javax", xs @ _*) => MergeStrategy.last
     case PathList("org", "apache", xs @ _*) => MergeStrategy.last
     case PathList("com", "esotericsoftware", xs @ _*) => MergeStrategy.last
+    case PathList("com", "sun", xs @ _*) => MergeStrategy.last
     case "about.html" => MergeStrategy.rename
     case x => old(x)
   }
