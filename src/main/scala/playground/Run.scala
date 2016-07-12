@@ -10,8 +10,10 @@ import org.apache.spark.sql.execution.datasources.LogicalRelation
 import org.apache.spark.sql.sources.BaseRelation
 import org.apache.spark.sql.DataFrame
 import com.databricks.spark.csv.CsvRelation
+import org.apache.spark.sql.execution.datasources.HadoopFsRelation
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
+import org.apache.spark.sql.execution.datasources.ListingFileCatalog
 
 import optiql.compiler._
 import optiql.library._
@@ -517,16 +519,23 @@ object Run {
               compileExpr[Long](left)(rec) / compileExpr[Long](right)(rec)
           }
           res.asInstanceOf[Rep[T]]
-        case CaseWhen(branches) =>
-          def aux_t (list:Seq[Expression]): List[(Expression, Expression)] = list match {
-            case cond::value::q => (cond, value)::aux_t(q)
-            case default::Nil => (Literal(true), default)::Nil
-            case Nil => Nil
+        case CaseWhen(branches, defval) =>
+          val default = defval match {
+            case None        => nullvalue(branches.head._2.dataType).asInstanceOf[Rep[T]]
+            case Some(value) => compileExpr[T](value)(rec)
           }
-
-          val default = nullvalue(d.dataType).asInstanceOf[Rep[T]]
-          val list = aux_t(branches)
-          list.foldRight (default) {
+          branches.foldRight (default) {
+            case ((cond, value), rhs) => if (compileExpr[Boolean](cond)(rec))
+                                            compileExpr[T](value)(rec)
+                                          else
+                                            rhs
+          }
+        case CaseWhenCodegen(branches, defval) =>
+          val default = defval match {
+            case None        => nullvalue(branches.head._2.dataType).asInstanceOf[Rep[T]]
+            case Some(value) => compileExpr[T](value)(rec)
+          }
+          branches.foldRight (default) {
             case ((cond, value), rhs) => if (compileExpr[Boolean](cond)(rec))
                                             compileExpr[T](value)(rec)
                                           else
@@ -593,13 +602,19 @@ object Run {
           fld.setAccessible(true)
           val children = fld.get(a).asInstanceOf[AggregateFunction]
           compileAggExpr[T](children)(rec.asInstanceOf[Rep[Table[Record]]])
+        case ScalarSubquery(query, children, id) =>
+          val res = compile(query, null)
+          val mf = extractMF(res)
+          field[T](table_first(res)(mf, implicitly[SourceContext]), mf.asInstanceOf[RefinedManifest[Record]].fields.head._1)
         case _ =>
           throw new RuntimeException("compileExpr, TODO: " + d.getClass.getName)
       }
 
       def getName(p: Expression): String = p match {
-        case p@AttributeReference(name, _, _, _) => name + "_" + p.exprId.id.toString
-        case p@Alias(_, name) => name + "_" + p.exprId.id.toString
+        case p@AttributeReference(name, _, _, _) =>
+          name.replaceAll("[\\p{Punct}\\s&&[^_]]", "") + "_" + p.exprId.id.toString
+        case p@Alias(x, name) =>
+          name.replaceAll("[\\p{Punct}\\s&&[^_]]", "") + "_" + p.exprId.id.toString
         case _ => throw new RuntimeException("getName, TODO: " + p.getClass.getName)
       }
 
@@ -617,6 +632,7 @@ object Run {
       case class PredicateJoin(pred: (Rep[Record], Rep[Record]) => Rep[Boolean]) extends CondVal
       case class MixedJoin(lkey: Rep[Record] => Rep[Any], rkey: Rep[Record] => Rep[Any], man: Manifest[Any], pred: (Rep[Record], Rep[Record]) => Rep[Boolean]) extends CondVal
       case class CartesianJoin() extends CondVal
+      case class Skip() extends CondVal
 
       def compileCond(cond: Option[Expression], mfl: RefinedManifest[Record], mfr: RefinedManifest[Record], forcePred: Boolean = false): CondVal = cond match {
         case Some(EqualTo(le, re)) =>
@@ -661,14 +677,18 @@ object Run {
               val mfk = m_Tup2(lmfk, rmfk).asInstanceOf[Manifest[Any]]
 
               MixedJoin(lekey, rekey, mfk, pred1)
+            case (Skip(), other) => other
+            case (other, Skip()) => other
           }
         case Some(Or(le, re)) =>
-          val pred = (compileCond(Some(le), mfl, mfr, true), compileCond(Some(re), mfl, mfr, true)) match {
+          (compileCond(Some(le), mfl, mfr, true), compileCond(Some(re), mfl, mfr, true)) match {
             case (PredicateJoin(pred1), PredicateJoin(pred2)) =>
-              (l: Rep[Record], r: Rep[Record]) => { pred1(l, r) || pred2(l, r) }
+              val pred = (l: Rep[Record], r: Rep[Record]) => { pred1(l, r) || pred2(l, r) }
+              PredicateJoin(pred)
+            case (Skip(), _) => compileCond(Some(re), mfl, mfr, forcePred)
+            case (_, Skip()) => compileCond(Some(le), mfl, mfr, forcePred)
             case _ => throw new RuntimeException("ERROR: unsupported operation in Or")
           }
-          PredicateJoin(pred)
         case Some(In(value, list)) =>
           val default = unit[Boolean](false).asInstanceOf[Rep[Boolean]]
           val pred = (l: Rep[Record], r: Rep[Record]) =>  if (fieldInRecord(mfl, value)) {
@@ -741,7 +761,8 @@ object Run {
           compileCond(Some(exp), mfl, mfr, true) match {
             case PredicateJoin(cond) => PredicateJoin((l, r) => !cond(l, r))
           }
-        case Some(exp) => throw new RuntimeException("TODO " + exp.getClass)
+        case Some(IsNull(_)) => Skip()
+        case Some(exp) => throw new RuntimeException("TODO compileCond: " + exp.getClass)
         case None => // Cartesian product
           CartesianJoin()
       }
@@ -830,6 +851,17 @@ object Run {
           e1 => {
               // TODO shortcut
               val res = t2.Count((e2: Rep[B]) => pred(e1, e2))
+              res > 0
+          }
+        )
+      }
+
+      def leftantijoin_pred[A:Manifest,B:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]], pred: (Rep[A], Rep[B]) => Rep[Boolean])(implicit __pos: SourceContext): Rep[Table[A]] = {
+        val pos = implicitly[SourceContext]
+        self.Where(
+          e1 => {
+              // TODO shortcut
+              val res = t2.Count((e2: Rep[B]) => pred(e1, e2))
               res == 0
           }
         )
@@ -855,21 +887,10 @@ object Run {
         res
       }
 
-
-      def getTag(d: LogicalPlan) = d match {
-          case LogicalRelation(relation, x) =>
-            relation match {
-              case relation: CsvRelation => relation.location
-              case _ => "TODO"
-            }
-          case _ => d.simpleString
-      }
-
-      def compile(d: LogicalPlan, inputs: Map[LogicalRelation,Rep[Table[Record]]], tag: String): Rep[Table[Record]] = {
-        if (debugf) tic(tag + getTag(d))
+      def compile(d: LogicalPlan, inputs: Map[LogicalRelation,Rep[Table[Record]]]): Rep[Table[Record]] = {
         val sol = d match {
           case Sort(sortingExpr, global, child) =>
-            val res = compile(child, inputs, "=" + tag)
+            val res = compile(child, inputs)
             val mfa = extractMF(res)
             table_orderby(
               res,
@@ -969,7 +990,7 @@ object Run {
               }
             )(mfa, implicitly[SourceContext])
           case Aggregate(groupingExpr, aggregateExpr, child) =>
-            val res = compile(child, inputs, "=" + tag)
+            val res = compile(child, inputs)
 
             if (aggregateExpr.length == 0)
               return res
@@ -1038,7 +1059,7 @@ object Run {
             }
 
           case Project(projectList, child) =>
-            val res = compile(child, inputs, "=" + tag)
+            val res = compile(child, inputs)
 
             // TODO handle distinc select
 
@@ -1063,15 +1084,15 @@ object Run {
               }
             )(mfb, mfa, implicitly[SourceContext])
           case Filter(condition, child) =>
-            val res = compile(child, inputs, "=" + tag)
+            val res = compile(child, inputs)
             val mf = extractMF(res)
             table_where(res, { (rec:Rep[Record]) =>
               compileExpr[Boolean](condition)(rec)
             })(mf, implicitly[SourceContext])
           case Limit(value, child) =>
-            val res = compile(child, inputs, "=" + tag)
+            val res = compile(child, inputs)
             res
-          case a@LogicalRelation(relation, x) =>
+          case a@LogicalRelation(relation, _, _) =>
             relation match {
               case relation: CsvRelation =>
                 if (preloadData) inputs(a) else {
@@ -1079,10 +1100,21 @@ object Run {
                   implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
                   Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]]
                 }
+              case relation if relation.getClass.getName == "org.apache.spark.sql.execution.datasources.HadoopFsRelation" =>//HadoopFsRelation(_, location, _, _, _, _, options) =>
+                val locfld = relation.getClass.getDeclaredFields.filter(_.getName == "location").head
+                locfld.setAccessible(true)
+                val optfld = relation.getClass.getDeclaredFields.filter(_.getName == "options").head
+                optfld.setAccessible(true)
+                if (preloadData) inputs(a) else {
+                  trait TYPE
+                  implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
+                  Table.fromFile[TYPE](locfld.get(relation).asInstanceOf[ListingFileCatalog].paths.head.toString.split(":")(1), escapeDelim((optfld.get(relation).asInstanceOf[Map[String,String]] apply "delimiter").charAt(0))).asInstanceOf[Rep[Table[Record]]]
+                }
+              case _ => throw new RuntimeException("Relation type missing: " + relation.getClass.getName)
             }
           case Join(left, right, tpe, cond) =>
-            val resl = compile(left, inputs, "L" + tag)
-            val resr = compile(right, inputs, "R" + tag)
+            val resl = compile(left, inputs)
+            val resr = compile(right, inputs)
 
             val mfl = extractMF(resl)
             val mfr = extractMF(resr)
@@ -1127,6 +1159,8 @@ object Run {
                     leftouterjoin(resl, resr, lkey, rkey, reskey, nullval)(mfl, mfr, mfk, mfo, pos)
                   case LeftSemi =>
                     leftsemijoin(resl, resr, lkey, rkey)(mfl, mfr, mfk, implicitly[SourceContext])
+                  case LeftAnti =>
+                    leftantijoin(resl, resr, lkey, rkey)(mfl, mfr, mfk, implicitly[SourceContext])
                   case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
                 }
               case PredicateJoin(pred) =>
@@ -1158,23 +1192,8 @@ object Run {
                         )(mfr, mfo, pos)
                       }
                     )(mfl, mfo, pos)
-                  case LeftSemi =>
-                    cond match {
-                      // TODO: catch it sooner
-                      case Some(Not(exp)) => compileCond(Some(exp), mfl_rec, mfr_rec) match {
-                        case EquiJoin(lkey, rkey, mfk) =>
-                          leftantijoin(resl, resr, lkey, rkey)(mfl, mfr, mfk, implicitly[SourceContext])
-                        case _ => throw new RuntimeException("TODO: convert semi  join to anti join Some(Not(exp))")
-                      }
-                      case Some(Or(Not(le), re)) => compileCond(Some(And(le, Not(re))), mfl_rec, mfr_rec) match {
-                        case EquiJoin(lkey, rkey, mfk) =>
-                          leftantijoin(resl, resr, lkey, rkey)(mfl, mfr, mfk, implicitly[SourceContext])
-                        case MixedJoin(lkey, rkey, mfk, pred) =>
-                          leftantijoin_mixed(resl, resr, lkey, rkey, pred)(mfl, mfr, mfk, implicitly[SourceContext])
-                        case _ => throw new RuntimeException("TODO: convert semi  join to anti join Some(Or(Not(),))")
-                      }
-                      case _  => leftsemijoin_pred(resl, resr, pred)(mfl, mfr, implicitly[SourceContext])
-                    }
+                  case LeftSemi => leftsemijoin_pred(resl, resr, pred)(mfl, mfr, implicitly[SourceContext])
+                  case LeftAnti => leftantijoin_pred(resl, resr, pred)(mfl, mfr, implicitly[SourceContext])
                 }
               case MixedJoin(lkey, rkey, mfk, pred) =>
                 tpe match {
@@ -1246,7 +1265,7 @@ object Run {
             val flc = a.getClass.getDeclaredFields.filter(_.getName == "child").head
             flc.setAccessible(true)
             val child = flc.get(a).asInstanceOf[LogicalPlan]
-            val res = compile(child, inputs, "=" + tag)
+            val res = compile(child, inputs)
 
             val mfa = extractMF(res)
             val mfo = ManifestFactory.refinedType[Record](
@@ -1277,7 +1296,6 @@ object Run {
             tres.asInstanceOf[Rep[Table[Record]]]
           case _ => throw new RuntimeException("unknown query operator: " + d.getClass)
         }
-        if (debugf) toc(tag + getTag(d), sol)
         sol
       }
 
@@ -1292,12 +1310,20 @@ object Run {
           preload(child)
         case Limit(value, child) =>
           preload(child)
-        case a@LogicalRelation(relation, _) =>
+        case a@LogicalRelation(relation, _, _) =>
           relation match {
             case relation: CsvRelation =>
               trait TYPE
               implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
               Map(a -> Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]])
+            case relation if relation.getClass.getName == "org.apache.spark.sql.execution.datasources.HadoopFsRelation" =>//HadoopFsRelation(_, location, _, _, _, _, options) =>
+              val locfld = relation.getClass.getDeclaredFields.filter(_.getName == "location").head
+              locfld.setAccessible(true)
+              val optfld = relation.getClass.getDeclaredFields.filter(_.getName == "options").head
+              optfld.setAccessible(true)
+              trait TYPE
+              implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
+              Map(a -> Table.fromFile[TYPE](locfld.get(relation).asInstanceOf[ListingFileCatalog].paths.head.toString.split(":")(1), escapeDelim((optfld.get(relation).asInstanceOf[Map[String,String]] apply "delimiter").charAt(0))).asInstanceOf[Rep[Table[Record]]])
           }
         case Join(left, right, tpe, cond) =>
           preload(left) ++ preload(right)
@@ -1328,7 +1354,7 @@ object Run {
           tic("exec", inputs.toSeq.map(_._2.size):_*)
         }
 
-        val res = compile(d, inputs, "> ")
+        val res = compile(d, inputs)
         System.out.println("Compiled")
 
         if (preloadData) {
