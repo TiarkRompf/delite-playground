@@ -27,7 +27,7 @@ In hyperdsl, modify the .gitmodules file as follow:
 
 Then install:
 
-    hyperdsl$ git submodulte update --init
+    hyperdsl$ git submodule update --init
     hyperdsl$ cd forge
     forge$ git checkout develop
     forge$ cd ../delite
