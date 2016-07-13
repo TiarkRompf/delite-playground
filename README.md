@@ -4,30 +4,44 @@ Delite Playground
 This repository contains some example [Delite](http://stanford-ppl.github.io/Delite/)
 and Spark programs.
 
-To build: 
+To build:
 
     sbt assembly
 
-To launch an interactive Spark shell with Delite support (assuming Spark is installed in `../spark`):
+To launch an interactive Spark shell with Delite support (assuming Spark is installed in `$SPARK_HOME` and delite-playground in `$DELITE_PLAY`):
 
-    java -cp ~/.ivy2/cache/com.google.guava/guava/jars/guava-11.0.2.jar:target/scala-2.11/delite-playground-assembly-0.1.jar:../spark/assembly/target/scala-2.11/spark-assembly-1.6.0-hadoop2.2.0.jar -Dscala.usejavacp=true -noverify org.apache.spark.repl.Main
+    java -cp $DELITE_PLAY/target/scala-2.11/delite-playground-assembly-0.1.jar:$SPARK_HOME/conf/:$SPARK_HOME/assembly/target/scala-2.11/jars/* -Dscala.usejavacp=true -Xmx512g org.apache.spark.deploy.SparkSubmit --class org.apache.spark.repl.Main spark-shell
 
 
 But first, build and install the artifacts from the
 [Hyperdsl](https://github.com/stanford-ppl/hyperdsl)
 repository.
 
-Hyperdsl: tested with branch wip-master (commit 338a2cd3bb07802525b26f14109093dd78120e9c), Forge bumped to commit 3324f3394e264f9e2bf8942d8de9d7f4dfc4b9b8, scala-version set to 2.11 in build.sbt
+Hyperdsl: tested with branch wip-master (commit 338a2cd3bb07802525b26f14109093dd78120e9c), Forge from [Gregory Essertel](https://github.com/GSAir/Forge) repository branch develop, scala-version set to 2.11 in build.sbt
 
+In hyperdsl, modify the .gitmodules file as follow:
+
+    [submodule "forge"]
+            path = forge
+            url = https://github.com/GSAir/Forge.git
+
+Then install:
+
+    hyperdsl$ git submodulte update --init
+    hyperdsl$ cd forge
+    forge$ git checkout develop
+    forge$ cd ../delite
+    delite$ git checkout develop
+    delite$ cd ..
+    hyperdsl$ git checkout 338a2cd3bb07802525b26f14109093dd78120e9c
     hyperdsl$ source init-env.sh
     hyperdsl$ sbt publish-local
     hyperdsl$ forge/bin/update -j ppl.dsl.forge.dsls.optiql.OptiQLDSLRunner OptiQL
     hyperdsl$ cd published/OptiQL
     hyperdsl/published/OptiQL$ sbt "; project OptiQL-shared; publish-local; project OptiQL-lib; publish-local; project OptiQL-comp; publish-local; project OptiQL-apps; publish-local; project OptiQL; publish-local; project OptiQL-ident; publish-local"
 
-Spark support: use Spark version 1.6.0 and if you are building locally, make sure to compile for Scala 2.11
+Spark support: use Spark version 2.0.0 (tag v2.0.0-rc2). To build it locally:
 
-    spark$ ./dev/change-scala-version.sh 2.11
-    spark$ mvn -Dscala-2.11 -DskipTests clean package
+    spark$ build/mvn -DskipTests clean install
 
 
