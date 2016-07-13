@@ -1236,6 +1236,8 @@ object Run {
                     leftouterjoin_pred(resl, resr, lkey, rkey, reskey, pred, nullval)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
                   case LeftSemi =>
                     leftsemijoin_mixed(resl, resr, lkey, rkey, pred)(mfl, mfr, mfk, implicitly[SourceContext])
+                  case LeftAnti =>
+                    leftantijoin_mixed(resl, resr, lkey, rkey, pred)(mfl, mfr, mfk, implicitly[SourceContext])
                   case _ => throw new RuntimeException(tpe.toString + " joins is not supported")
                 }
               case CartesianJoin() =>
