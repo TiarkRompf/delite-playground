@@ -324,36 +324,36 @@ object Run {
         ManifestFactory.refinedType[Record](manifest[Record], names.toList, elems.toList)
       }
 
-      def isnull(value: Expression)(l: Rep[Record]): Rep[Boolean] = {
+      def isnull(value: Expression, input: Map[LogicalRelation,Rep[Table[Record]]])(l: Rep[Record]): Rep[Boolean] = {
           value.dataType match {
-            case IntegerType  => compileExpr[Int](value)(l) == intnull
-            case LongType     => compileExpr[Long](value)(l) == longnull
-            case FloatType    => compileExpr[Float](value)(l) == floatnull
-            case DoubleType   => compileExpr[Double](value)(l) == doublenull
-            case DateType     => compileExpr[Date](value)(l) == datenull
-            case StringType   => compileExpr[String](value)(l) == strnull
+            case IntegerType  => compileExpr[Int](value, input)(l) == intnull
+            case LongType     => compileExpr[Long](value, input)(l) == longnull
+            case FloatType    => compileExpr[Float](value, input)(l) == floatnull
+            case DoubleType   => compileExpr[Double](value, input)(l) == doublenull
+            case DateType     => compileExpr[Date](value, input)(l) == datenull
+            case StringType   => compileExpr[String](value, input)(l) == strnull
           }
       }
 
-      def compileAggExpr[T:Manifest](d: AggregateFunction)(rec: Rep[Table[Record]]): Rep[T] = d match {
+      def compileAggExpr[T:Manifest](d: AggregateFunction, input: Map[LogicalRelation,Rep[Table[Record]]])(rec: Rep[Table[Record]]): Rep[T] = d match {
         case Sum(child) =>
           val res = child.dataType match {
             case FloatType  =>
-              rec.Sum(l => compileExpr[Float](child)(l))
+              rec.Sum(l => compileExpr[Float](child, input)(l))
             case DoubleType  =>
-              rec.Sum(l => compileExpr[Double](child)(l))
+              rec.Sum(l => compileExpr[Double](child, input)(l))
             case IntegerType =>
-              rec.Sum(l => compileExpr[Int](child)(l))
+              rec.Sum(l => compileExpr[Int](child, input)(l))
             case LongType =>
-              rec.Sum(l => compileExpr[Long](child)(l))
+              rec.Sum(l => compileExpr[Long](child, input)(l))
           }
           res.asInstanceOf[Rep[T]]
         case Average(child) =>
           val res = child.dataType match {
             case FloatType  =>
-              rec.Average(l => compileExpr[Float](child)(l))
+              rec.Average(l => compileExpr[Float](child, input)(l))
             case DoubleType  =>
-              rec.Average(l => compileExpr[Double](child)(l))
+              rec.Average(l => compileExpr[Double](child, input)(l))
             //case IntegerType =>
             //  rec.Average(l => compileExpr[Fractional[Int]](child)(l))
             //case LongType =>
@@ -363,29 +363,29 @@ object Run {
           res.asInstanceOf[Rep[T]]
         case Count(child) =>
           val res = child.head match {
-            case AttributeReference(_, _, _, _) => rec.Count((l: Rep[Record]) => !isnull(child.head)(l))
+            case AttributeReference(_, _, _, _) => rec.Count((l: Rep[Record]) => !isnull(child.head, input)(l))
             case _ => rec.Count()
           }
           res.asInstanceOf[Rep[T]]
         case Min(child) =>
           val res = child.dataType match {
-            case IntegerType  => rec.Min(l => compileExpr[Int](child)(l))
-            case LongType     => rec.Min(l => compileExpr[Long](child)(l))
-            case FloatType    => rec.Min(l => compileExpr[Float](child)(l))
-            case DoubleType   => rec.Min(l => compileExpr[Double](child)(l))
+            case IntegerType  => rec.Min(l => compileExpr[Int](child, input)(l))
+            case LongType     => rec.Min(l => compileExpr[Long](child, input)(l))
+            case FloatType    => rec.Min(l => compileExpr[Float](child, input)(l))
+            case DoubleType   => rec.Min(l => compileExpr[Double](child, input)(l))
             //case DateType     => rec.Min(l => compileExpr[Date](child)(l))
-            case StringType   => rec.Min(l => compileExpr[String](child)(l))
+            case StringType   => rec.Min(l => compileExpr[String](child, input)(l))
             case _ => throw new RuntimeException("Min: TODO " + child.dataType)
           }
           res.asInstanceOf[Rep[T]]
         case Max(child) =>
           val res = child.dataType match {
-            case IntegerType  => rec.Max(l => compileExpr[Int](child)(l))
-            case LongType     => rec.Max(l => compileExpr[Long](child)(l))
-            case FloatType    => rec.Max(l => compileExpr[Float](child)(l))
-            case DoubleType   => rec.Max(l => compileExpr[Double](child)(l))
-            //case DateType     => rec.Min(l => compileExpr[Date](child)(l))
-            case StringType   => rec.Max(l => compileExpr[String](child)(l))
+            case IntegerType  => rec.Max(l => compileExpr[Int](child, input)(l))
+            case LongType     => rec.Max(l => compileExpr[Long](child, input)(l))
+            case FloatType    => rec.Max(l => compileExpr[Float](child, input)(l))
+            case DoubleType   => rec.Max(l => compileExpr[Double](child, input)(l))
+            //case DateType     => rec.Min(l => compileExpr[Date](child, input)(l))
+            case StringType   => rec.Max(l => compileExpr[String](child, input)(l))
             case _ => throw new RuntimeException("Max: TODO " + child.dataType)
           }
           res.asInstanceOf[Rep[T]]
@@ -401,7 +401,7 @@ object Run {
         case StringType   => strnull
       }
 
-      def compileExpr[T:Manifest](d: Expression)(rec: Rep[_]): Rep[T] = d match {
+      def compileExpr[T:Manifest](d: Expression, input: Map[LogicalRelation,Rep[Table[Record]]])(rec: Rep[_]): Rep[T] = d match {
         case AttributeReference(_, _, _, _) =>
           field[T](rec, getName(d))
         case Literal(null, tpe) => nullvalue(tpe).asInstanceOf[Rep[T]]
@@ -412,141 +412,141 @@ object Run {
         case Literal(value, _) =>
           unit[T](value.asInstanceOf[T])
         case And(left, right) =>
-          infix_&&(compileExpr[Boolean](left)(rec), compileExpr[Boolean](right)(rec)).asInstanceOf[Rep[T]]
+          infix_&&(compileExpr[Boolean](left, input)(rec), compileExpr[Boolean](right, input)(rec)).asInstanceOf[Rep[T]]
         case Or(left, right) =>
-          infix_||(compileExpr[Boolean](left)(rec), compileExpr[Boolean](right)(rec)).asInstanceOf[Rep[T]]
+          infix_||(compileExpr[Boolean](left, input)(rec), compileExpr[Boolean](right, input)(rec)).asInstanceOf[Rep[T]]
         case Not(value) =>
-          (!compileExpr[Boolean](value)(rec)).asInstanceOf[Rep[T]]
+          (!compileExpr[Boolean](value, input)(rec)).asInstanceOf[Rep[T]]
         case LessThan(a,b) =>
           val bo = a.dataType match {
-            case FloatType    => compileExpr[Float](a)(rec) < compileExpr[Float](b)(rec)
-            case DoubleType   => compileExpr[Double](a)(rec) < compileExpr[Double](b)(rec)
-            case IntegerType  => compileExpr[Int](a)(rec) < compileExpr[Int](b)(rec)
-            case LongType     => compileExpr[Long](a)(rec) < compileExpr[Long](b)(rec)
-            case DateType     => compileExpr[Date](a)(rec) < compileExpr[Date](b)(rec)
-            case StringType   => compileExpr[String](a)(rec) < compileExpr[String](b)(rec)
+            case FloatType    => compileExpr[Float](a, input)(rec) < compileExpr[Float](b, input)(rec)
+            case DoubleType   => compileExpr[Double](a, input)(rec) < compileExpr[Double](b, input)(rec)
+            case IntegerType  => compileExpr[Int](a, input)(rec) < compileExpr[Int](b, input)(rec)
+            case LongType     => compileExpr[Long](a, input)(rec) < compileExpr[Long](b, input)(rec)
+            case DateType     => compileExpr[Date](a, input)(rec) < compileExpr[Date](b, input)(rec)
+            case StringType   => compileExpr[String](a, input)(rec) < compileExpr[String](b, input)(rec)
           }
           bo.asInstanceOf[Rep[T]]
         case LessThanOrEqual(a,b) =>
           val bo = a.dataType match {
-            case FloatType    => compileExpr[Float](a)(rec) <= compileExpr[Float](b)(rec)
-            case DoubleType   => compileExpr[Double](a)(rec) <= compileExpr[Double](b)(rec)
-            case IntegerType  => compileExpr[Int](a)(rec) <= compileExpr[Int](b)(rec)
-            case LongType     => compileExpr[Long](a)(rec) <= compileExpr[Long](b)(rec)
-            case DateType     => compileExpr[Date](a)(rec) <= compileExpr[Date](b)(rec)
-            case StringType   => compileExpr[String](a)(rec) <= compileExpr[String](b)(rec)
+            case FloatType    => compileExpr[Float](a, input)(rec) <= compileExpr[Float](b, input)(rec)
+            case DoubleType   => compileExpr[Double](a, input)(rec) <= compileExpr[Double](b, input)(rec)
+            case IntegerType  => compileExpr[Int](a, input)(rec) <= compileExpr[Int](b, input)(rec)
+            case LongType     => compileExpr[Long](a, input)(rec) <= compileExpr[Long](b, input)(rec)
+            case DateType     => compileExpr[Date](a, input)(rec) <= compileExpr[Date](b, input)(rec)
+            case StringType   => compileExpr[String](a, input)(rec) <= compileExpr[String](b, input)(rec)
           }
           bo.asInstanceOf[Rep[T]]
         case GreaterThan(a,b) =>
           val bo = a.dataType match {
-            case FloatType    => compileExpr[Float](a)(rec) > compileExpr[Float](b)(rec)
-            case DoubleType   => compileExpr[Double](a)(rec) > compileExpr[Double](b)(rec)
-            case IntegerType  => compileExpr[Int](a)(rec) > compileExpr[Int](b)(rec)
-            case LongType     => compileExpr[Long](a)(rec) > compileExpr[Long](b)(rec)
-            case DateType     => compileExpr[Date](a)(rec) > compileExpr[Date](b)(rec)
-            case StringType   => compileExpr[String](a)(rec) > compileExpr[String](b)(rec)
+            case FloatType    => compileExpr[Float](a, input)(rec) > compileExpr[Float](b, input)(rec)
+            case DoubleType   => compileExpr[Double](a, input)(rec) > compileExpr[Double](b, input)(rec)
+            case IntegerType  => compileExpr[Int](a, input)(rec) > compileExpr[Int](b, input)(rec)
+            case LongType     => compileExpr[Long](a, input)(rec) > compileExpr[Long](b, input)(rec)
+            case DateType     => compileExpr[Date](a, input)(rec) > compileExpr[Date](b, input)(rec)
+            case StringType   => compileExpr[String](a, input)(rec) > compileExpr[String](b, input)(rec)
           }
           bo.asInstanceOf[Rep[T]]
         case GreaterThanOrEqual(a,b) =>
           val bo = a.dataType match {
-            case FloatType    => compileExpr[Float](a)(rec) >= compileExpr[Float](b)(rec)
-            case DoubleType   => compileExpr[Double](a)(rec) >= compileExpr[Double](b)(rec)
-            case IntegerType  => compileExpr[Int](a)(rec) >= compileExpr[Int](b)(rec)
-            case LongType     => compileExpr[Long](a)(rec) >= compileExpr[Long](b)(rec)
-            case DateType     => compileExpr[Date](a)(rec) >= compileExpr[Date](b)(rec)
-            case StringType   => compileExpr[String](a)(rec) >= compileExpr[String](b)(rec)
+            case FloatType    => compileExpr[Float](a, input)(rec) >= compileExpr[Float](b, input)(rec)
+            case DoubleType   => compileExpr[Double](a, input)(rec) >= compileExpr[Double](b, input)(rec)
+            case IntegerType  => compileExpr[Int](a, input)(rec) >= compileExpr[Int](b, input)(rec)
+            case LongType     => compileExpr[Long](a, input)(rec) >= compileExpr[Long](b, input)(rec)
+            case DateType     => compileExpr[Date](a, input)(rec) >= compileExpr[Date](b, input)(rec)
+            case StringType   => compileExpr[String](a, input)(rec) >= compileExpr[String](b, input)(rec)
           }
           bo.asInstanceOf[Rep[T]]
         case EqualTo(a,b) =>
           val bo = a.dataType match {
-            case FloatType    => compileExpr[Float](a)(rec) == compileExpr[Float](b)(rec)
-            case DoubleType   => compileExpr[Double](a)(rec) == compileExpr[Double](b)(rec)
-            case IntegerType  => compileExpr[Int](a)(rec) == compileExpr[Int](b)(rec)
-            case LongType     => compileExpr[Long](a)(rec) == compileExpr[Long](b)(rec)
-            case DateType     => compileExpr[Date](a)(rec) == compileExpr[Date](b)(rec)
-            case StringType   => compileExpr[String](a)(rec) == compileExpr[String](b)(rec)
+            case FloatType    => compileExpr[Float](a, input)(rec) == compileExpr[Float](b, input)(rec)
+            case DoubleType   => compileExpr[Double](a, input)(rec) == compileExpr[Double](b, input)(rec)
+            case IntegerType  => compileExpr[Int](a, input)(rec) == compileExpr[Int](b, input)(rec)
+            case LongType     => compileExpr[Long](a, input)(rec) == compileExpr[Long](b, input)(rec)
+            case DateType     => compileExpr[Date](a, input)(rec) == compileExpr[Date](b, input)(rec)
+            case StringType   => compileExpr[String](a, input)(rec) == compileExpr[String](b, input)(rec)
           }
           bo.asInstanceOf[Rep[T]]
         case Alias(child, name) =>
-          compileExpr[T](child)(rec)
+          compileExpr[T](child, input)(rec)
         case Cast(child, dataType) =>
-          compileExpr[T](child)(rec)
+          compileExpr[T](child, input)(rec)
         case Add(left, right) =>
           val res = left.dataType match {
             case FloatType  =>
-              compileExpr[Float](left)(rec) + compileExpr[Float](right)(rec)
+              compileExpr[Float](left, input)(rec) + compileExpr[Float](right, input)(rec)
             case DoubleType  =>
-              compileExpr[Double](left)(rec) + compileExpr[Double](right)(rec)
+              compileExpr[Double](left, input)(rec) + compileExpr[Double](right, input)(rec)
             case IntegerType =>
-              compileExpr[Int](left)(rec) + compileExpr[Int](right)(rec)
+              compileExpr[Int](left, input)(rec) + compileExpr[Int](right, input)(rec)
             case LongType =>
-              compileExpr[Long](left)(rec) + compileExpr[Long](right)(rec)
+              compileExpr[Long](left, input)(rec) + compileExpr[Long](right, input)(rec)
           }
           res.asInstanceOf[Rep[T]]
         case Subtract(left, right) =>
           val res = left.dataType match {
             case FloatType  =>
-              compileExpr[Float](left)(rec) - compileExpr[Float](right)(rec)
+              compileExpr[Float](left, input)(rec) - compileExpr[Float](right, input)(rec)
             case DoubleType  =>
-              compileExpr[Double](left)(rec) - compileExpr[Double](right)(rec)
+              compileExpr[Double](left, input)(rec) - compileExpr[Double](right, input)(rec)
             case IntegerType =>
-              compileExpr[Int](left)(rec) - compileExpr[Int](right)(rec)
+              compileExpr[Int](left, input)(rec) - compileExpr[Int](right, input)(rec)
             case LongType =>
-              compileExpr[Long](left)(rec) - compileExpr[Long](right)(rec)
+              compileExpr[Long](left, input)(rec) - compileExpr[Long](right, input)(rec)
           }
           res.asInstanceOf[Rep[T]]
         case Multiply(left, right) =>
           val res = left.dataType match {
             case FloatType  =>
-              compileExpr[Float](left)(rec) * compileExpr[Float](right)(rec)
+              compileExpr[Float](left, input)(rec) * compileExpr[Float](right, input)(rec)
             case DoubleType  =>
-              compileExpr[Double](left)(rec) * compileExpr[Double](right)(rec)
+              compileExpr[Double](left, input)(rec) * compileExpr[Double](right, input)(rec)
             case IntegerType =>
-              compileExpr[Int](left)(rec) * compileExpr[Int](right)(rec)
+              compileExpr[Int](left, input)(rec) * compileExpr[Int](right, input)(rec)
             case LongType =>
-              compileExpr[Long](left)(rec) * compileExpr[Long](right)(rec)
+              compileExpr[Long](left, input)(rec) * compileExpr[Long](right, input)(rec)
           }
           res.asInstanceOf[Rep[T]]
         case Divide(left, right) =>
           val res = left.dataType match {
             case FloatType  =>
-              compileExpr[Float](left)(rec) / compileExpr[Float](right)(rec)
+              compileExpr[Float](left, input)(rec) / compileExpr[Float](right, input)(rec)
             case DoubleType  =>
-              compileExpr[Double](left)(rec) / compileExpr[Double](right)(rec)
+              compileExpr[Double](left, input)(rec) / compileExpr[Double](right, input)(rec)
             case IntegerType =>
-              compileExpr[Int](left)(rec) / compileExpr[Int](right)(rec)
+              compileExpr[Int](left, input)(rec) / compileExpr[Int](right, input)(rec)
             case LongType =>
-              compileExpr[Long](left)(rec) / compileExpr[Long](right)(rec)
+              compileExpr[Long](left, input)(rec) / compileExpr[Long](right, input)(rec)
           }
           res.asInstanceOf[Rep[T]]
         case CaseWhen(branches, defval) =>
           val default = defval match {
             case None        => nullvalue(branches.head._2.dataType).asInstanceOf[Rep[T]]
-            case Some(value) => compileExpr[T](value)(rec)
+            case Some(value) => compileExpr[T](value, input)(rec)
           }
           branches.foldRight (default) {
-            case ((cond, value), rhs) => if (compileExpr[Boolean](cond)(rec))
-                                            compileExpr[T](value)(rec)
+            case ((cond, value), rhs) => if (compileExpr[Boolean](cond, input)(rec))
+                                            compileExpr[T](value, input)(rec)
                                           else
                                             rhs
           }
         case CaseWhenCodegen(branches, defval) =>
           val default = defval match {
             case None        => nullvalue(branches.head._2.dataType).asInstanceOf[Rep[T]]
-            case Some(value) => compileExpr[T](value)(rec)
+            case Some(value) => compileExpr[T](value, input)(rec)
           }
           branches.foldRight (default) {
-            case ((cond, value), rhs) => if (compileExpr[Boolean](cond)(rec))
-                                            compileExpr[T](value)(rec)
+            case ((cond, value), rhs) => if (compileExpr[Boolean](cond, input)(rec))
+                                            compileExpr[T](value, input)(rec)
                                           else
                                             rhs
           }
         case StartsWith(str, pref) =>
-          compileExpr[String](str)(rec).startsWith(compileExpr[String](pref)(rec)).asInstanceOf[Rep[T]]
+          compileExpr[String](str, input)(rec).startsWith(compileExpr[String](pref, input)(rec)).asInstanceOf[Rep[T]]
         case EndsWith(str, suff) =>
-          compileExpr[String](str)(rec).endsWith(compileExpr[String](suff)(rec)).asInstanceOf[Rep[T]]
+          compileExpr[String](str, input)(rec).endsWith(compileExpr[String](suff, input)(rec)).asInstanceOf[Rep[T]]
         case Contains(str, suff) =>
-          compileExpr[String](str)(rec).contains(compileExpr[String](suff)(rec)).asInstanceOf[Rep[T]]
+          compileExpr[String](str, input)(rec).contains(compileExpr[String](suff, input)(rec)).asInstanceOf[Rep[T]]
         case Like(left, right) =>
 
           // Hack
@@ -558,7 +558,7 @@ object Run {
 
           val minusone = unit[Int](-1).asInstanceOf[Rep[Int]]
           val zero = unit[Int](0).asInstanceOf[Rep[Int]]
-          val value = compileExpr[String](left)(rec)
+          val value = compileExpr[String](left, input)(rec)
 
           def res(l: List[String], idx: Rep[Int]): Rep[Boolean] = l match {
             case h::q => val idxx = fstring_indexof(value, unit[String](h), idx)
@@ -571,29 +571,29 @@ object Run {
 
           res(token, zero).asInstanceOf[Rep[T]]
         case Substring(value, idx1, idx2) =>
-          val tmp = compileExpr[Int](idx1)(rec) - 1
-          fstring_substring(compileExpr[String](value)(rec), tmp, tmp + compileExpr[Int](idx2)(rec))(implicitly[SourceContext], new Overload2).asInstanceOf[Rep[T]]
+          val tmp = compileExpr[Int](idx1, input)(rec) - 1
+          fstring_substring(compileExpr[String](value, input)(rec), tmp, tmp + compileExpr[Int](idx2, input)(rec))(implicitly[SourceContext], new Overload2).asInstanceOf[Rep[T]]
 
         case Year(exp) =>
-          primitive_forge_int_shift_right_unsigned(date_value(compileExpr[Date](exp)(rec)), unit[Int](9)).asInstanceOf[Rep[T]]
+          primitive_forge_int_shift_right_unsigned(date_value(compileExpr[Date](exp, input)(rec)), unit[Int](9)).asInstanceOf[Rep[T]]
         case In (value, list) =>
           val default = unit[Boolean](false).asInstanceOf[Rep[Boolean]]
           // TODO improve code?
           val res = list.foldRight (default) {
-              case (p, rhs) => infix_||(rhs, compileExpr[Boolean](EqualTo(p, value))(rec))
+              case (p, rhs) => infix_||(rhs, compileExpr[Boolean](EqualTo(p, value), input)(rec))
             }
           res.asInstanceOf[Rep[T]]
         case IsNull(value) =>
-          val res = isnull(value)(rec.asInstanceOf[Rep[Record]])
+          val res = isnull(value, input)(rec.asInstanceOf[Rep[Record]])
           res.asInstanceOf[Rep[T]]
         case IsNotNull(value) =>
-          val res = !isnull(value)(rec.asInstanceOf[Rep[Record]])
+          val res = !isnull(value, input)(rec.asInstanceOf[Rep[Record]])
           res.asInstanceOf[Rep[T]]
         case If(cond, firstbranch, secondbranch) =>
-          val res = if (compileExpr[Boolean](cond)(rec))
-                      compileExpr[T](firstbranch)(rec)
+          val res = if (compileExpr[Boolean](cond, input)(rec))
+                      compileExpr[T](firstbranch, input)(rec)
                     else
-                      compileExpr[T](secondbranch)(rec)
+                      compileExpr[T](secondbranch, input)(rec)
           res.asInstanceOf[Rep[T]]
         case a : Expression if a.getClass.getName == aggexp =>
           // class AggregateExpression is private, so we use reflection
@@ -601,7 +601,7 @@ object Run {
           val fld = a.getClass.getDeclaredFields.filter(_.getName == "aggregateFunction").head
           fld.setAccessible(true)
           val children = fld.get(a).asInstanceOf[AggregateFunction]
-          compileAggExpr[T](children)(rec.asInstanceOf[Rep[Table[Record]]])
+          compileAggExpr[T](children, input)(rec.asInstanceOf[Rep[Table[Record]]])
         case ScalarSubquery(query, children, id) =>
           val res = compile(query, null)
           val mf = extractMF(res)
@@ -634,11 +634,11 @@ object Run {
       case class CartesianJoin() extends CondVal
       case class Skip() extends CondVal
 
-      def compileCond(cond: Option[Expression], mfl: RefinedManifest[Record], mfr: RefinedManifest[Record], forcePred: Boolean = false): CondVal = cond match {
+      def compileCond(cond: Option[Expression], mfl: RefinedManifest[Record], mfr: RefinedManifest[Record], input: Map[LogicalRelation,Rep[Table[Record]]], forcePred: Boolean = false): CondVal = cond match {
         case Some(EqualTo(le, re)) =>
           val mfk = getType(cond).asInstanceOf[Manifest[Any]]
-          val lekey = (p: Rep[Record]) => { compileExpr[Any](le)(p)(mfk) }
-          val rekey = (p: Rep[Record]) => { compileExpr[Any](re)(p)(mfk) }
+          val lekey = (p: Rep[Record]) => { compileExpr[Any](le, input)(p)(mfk) }
+          val rekey = (p: Rep[Record]) => { compileExpr[Any](re, input)(p)(mfk) }
           if (fieldInRecord(mfl, le) && fieldInRecord(mfr, re)) {
             if (forcePred)
               PredicateJoin((l: Rep[Record], r: Rep[Record]) => { lekey(l) == rekey(r) })
@@ -653,7 +653,7 @@ object Run {
             throw new RuntimeException("Invalid syntax")
           }
         case Some(And(le, re)) =>
-          (compileCond(Some(le), mfl, mfr, forcePred), compileCond(Some(re), mfl, mfr, forcePred)) match {
+          (compileCond(Some(le), mfl, mfr, input, forcePred), compileCond(Some(re), mfl, mfr, input, forcePred)) match {
             case (EquiJoin(llkey, rlkey, lmfk), EquiJoin(lrkey, rrkey, rmfk)) =>
               val pos = implicitly[SourceContext]
 
@@ -681,23 +681,23 @@ object Run {
             case (other, Skip()) => other
           }
         case Some(Or(le, re)) =>
-          (compileCond(Some(le), mfl, mfr, true), compileCond(Some(re), mfl, mfr, true)) match {
+          (compileCond(Some(le), mfl, mfr, input, true), compileCond(Some(re), mfl, mfr, input, true)) match {
             case (PredicateJoin(pred1), PredicateJoin(pred2)) =>
               val pred = (l: Rep[Record], r: Rep[Record]) => { pred1(l, r) || pred2(l, r) }
               PredicateJoin(pred)
-            case (Skip(), _) => compileCond(Some(re), mfl, mfr, forcePred)
-            case (_, Skip()) => compileCond(Some(le), mfl, mfr, forcePred)
+            case (Skip(), _) => compileCond(Some(re), mfl, mfr, input, forcePred)
+            case (_, Skip()) => compileCond(Some(le), mfl, mfr, input, forcePred)
             case _ => throw new RuntimeException("ERROR: unsupported operation in Or")
           }
         case Some(In(value, list)) =>
           val default = unit[Boolean](false).asInstanceOf[Rep[Boolean]]
           val pred = (l: Rep[Record], r: Rep[Record]) =>  if (fieldInRecord(mfl, value)) {
             list.foldRight (default) {
-              case (p, rhs) => infix_||(compileExpr[Boolean](EqualTo(p, value))(l), rhs)
+              case (p, rhs) => infix_||(compileExpr[Boolean](EqualTo(p, value), input)(l), rhs)
             }
           } else {
             list.foldRight (default) {
-              case (p, rhs) => infix_||(compileExpr[Boolean](EqualTo(p, value))(r), rhs)
+              case (p, rhs) => infix_||(compileExpr[Boolean](EqualTo(p, value), input)(r), rhs)
             }
           }
           PredicateJoin(pred)
@@ -706,12 +706,12 @@ object Run {
             val ll = if (fieldInRecord(mfl, lhs)) l else r
             val rr = if (fieldInRecord(mfl, rhs)) l else r
             lhs.dataType match {
-              case FloatType    => compileExpr[Float](lhs)(ll) >= compileExpr[Float](rhs)(rr)
-              case DoubleType   => compileExpr[Double](lhs)(ll) >= compileExpr[Double](rhs)(rr)
-              case IntegerType  => compileExpr[Int](lhs)(ll) >= compileExpr[Int](rhs)(rr)
-              case LongType     => compileExpr[Long](lhs)(ll) >= compileExpr[Long](rhs)(rr)
-              case DateType     => compileExpr[Date](lhs)(ll) >= compileExpr[Date](rhs)(rr)
-              case StringType   => compileExpr[String](lhs)(ll) >= compileExpr[String](rhs)(rr)
+              case FloatType    => compileExpr[Float](lhs, input)(ll) >= compileExpr[Float](rhs, input)(rr)
+              case DoubleType   => compileExpr[Double](lhs, input)(ll) >= compileExpr[Double](rhs, input)(rr)
+              case IntegerType  => compileExpr[Int](lhs, input)(ll) >= compileExpr[Int](rhs, input)(rr)
+              case LongType     => compileExpr[Long](lhs, input)(ll) >= compileExpr[Long](rhs, input)(rr)
+              case DateType     => compileExpr[Date](lhs, input)(ll) >= compileExpr[Date](rhs, input)(rr)
+              case StringType   => compileExpr[String](lhs, input)(ll) >= compileExpr[String](rhs, input)(rr)
             }
           }
           PredicateJoin(pred)
@@ -720,12 +720,12 @@ object Run {
             val ll = if (fieldInRecord(mfl, lhs)) l else r
             val rr = if (fieldInRecord(mfl, rhs)) l else r
             lhs.dataType match {
-              case FloatType    => compileExpr[Float](lhs)(ll) > compileExpr[Float](rhs)(rr)
-              case DoubleType   => compileExpr[Double](lhs)(ll) > compileExpr[Double](rhs)(rr)
-              case IntegerType  => compileExpr[Int](lhs)(ll) > compileExpr[Int](rhs)(rr)
-              case LongType     => compileExpr[Long](lhs)(ll) > compileExpr[Long](rhs)(rr)
-              case DateType     => compileExpr[Date](lhs)(ll) > compileExpr[Date](rhs)(rr)
-              case StringType   => compileExpr[String](lhs)(ll) > compileExpr[String](rhs)(rr)
+              case FloatType    => compileExpr[Float](lhs, input)(ll) > compileExpr[Float](rhs, input)(rr)
+              case DoubleType   => compileExpr[Double](lhs, input)(ll) > compileExpr[Double](rhs, input)(rr)
+              case IntegerType  => compileExpr[Int](lhs, input)(ll) > compileExpr[Int](rhs, input)(rr)
+              case LongType     => compileExpr[Long](lhs, input)(ll) > compileExpr[Long](rhs, input)(rr)
+              case DateType     => compileExpr[Date](lhs, input)(ll) > compileExpr[Date](rhs, input)(rr)
+              case StringType   => compileExpr[String](lhs, input)(ll) > compileExpr[String](rhs, input)(rr)
             }
           }
           PredicateJoin(pred)
@@ -734,12 +734,12 @@ object Run {
             val ll = if (fieldInRecord(mfl, lhs)) l else r
             val rr = if (fieldInRecord(mfl, rhs)) l else r
             lhs.dataType match {
-              case FloatType    => compileExpr[Float](lhs)(ll) <= compileExpr[Float](rhs)(rr)
-              case DoubleType   => compileExpr[Double](lhs)(ll) <= compileExpr[Double](rhs)(rr)
-              case IntegerType  => compileExpr[Int](lhs)(ll) <= compileExpr[Int](rhs)(rr)
-              case LongType     => compileExpr[Long](lhs)(ll) <= compileExpr[Long](rhs)(rr)
-              case DateType     => compileExpr[Date](lhs)(ll) <= compileExpr[Date](rhs)(rr)
-              case StringType   => compileExpr[String](lhs)(ll) <= compileExpr[String](rhs)(rr)
+              case FloatType    => compileExpr[Float](lhs, input)(ll) <= compileExpr[Float](rhs, input)(rr)
+              case DoubleType   => compileExpr[Double](lhs, input)(ll) <= compileExpr[Double](rhs, input)(rr)
+              case IntegerType  => compileExpr[Int](lhs, input)(ll) <= compileExpr[Int](rhs, input)(rr)
+              case LongType     => compileExpr[Long](lhs, input)(ll) <= compileExpr[Long](rhs, input)(rr)
+              case DateType     => compileExpr[Date](lhs, input)(ll) <= compileExpr[Date](rhs, input)(rr)
+              case StringType   => compileExpr[String](lhs, input)(ll) <= compileExpr[String](rhs, input)(rr)
             }
           }
           PredicateJoin(pred)
@@ -748,17 +748,17 @@ object Run {
             val ll = if (fieldInRecord(mfl, lhs)) l else r
             val rr = if (fieldInRecord(mfl, rhs)) l else r
             lhs.dataType match {
-              case FloatType    => compileExpr[Float](lhs)(ll) < compileExpr[Float](rhs)(rr)
-              case DoubleType   => compileExpr[Double](lhs)(ll) < compileExpr[Double](rhs)(rr)
-              case IntegerType  => compileExpr[Int](lhs)(ll) < compileExpr[Int](rhs)(rr)
-              case LongType     => compileExpr[Long](lhs)(ll) < compileExpr[Long](rhs)(rr)
-              case DateType     => compileExpr[Date](lhs)(ll) < compileExpr[Date](rhs)(rr)
-              case StringType   => compileExpr[String](lhs)(ll) < compileExpr[String](rhs)(rr)
+              case FloatType    => compileExpr[Float](lhs, input)(ll) < compileExpr[Float](rhs, input)(rr)
+              case DoubleType   => compileExpr[Double](lhs, input)(ll) < compileExpr[Double](rhs, input)(rr)
+              case IntegerType  => compileExpr[Int](lhs, input)(ll) < compileExpr[Int](rhs, input)(rr)
+              case LongType     => compileExpr[Long](lhs, input)(ll) < compileExpr[Long](rhs, input)(rr)
+              case DateType     => compileExpr[Date](lhs, input)(ll) < compileExpr[Date](rhs, input)(rr)
+              case StringType   => compileExpr[String](lhs, input)(ll) < compileExpr[String](rhs, input)(rr)
             }
           }
           PredicateJoin(pred)
         case Some(Not(exp)) =>
-          compileCond(Some(exp), mfl, mfr, true) match {
+          compileCond(Some(exp), mfl, mfr, input, true) match {
             case PredicateJoin(cond) => PredicateJoin((l, r) => !cond(l, r))
           }
         case Some(IsNull(_)) => Skip()
@@ -887,10 +887,10 @@ object Run {
         res
       }
 
-      def compile(d: LogicalPlan, inputs: Map[LogicalRelation,Rep[Table[Record]]]): Rep[Table[Record]] = {
+      def compile(d: LogicalPlan, input: Map[LogicalRelation,Rep[Table[Record]]]): Rep[Table[Record]] = {
         val sol = d match {
           case Sort(sortingExpr, global, child) =>
-            val res = compile(child, inputs)
+            val res = compile(child, input)
             val mfa = extractMF(res)
             table_orderby(
               res,
@@ -901,18 +901,18 @@ object Run {
                       case FloatType =>
                         if (order == Ascending)
                           (x:Rep[Record], y:Rep[Record]) => {
-                            if (compileExpr[Float](child)(x) < compileExpr[Float](child)(y))
+                            if (compileExpr[Float](child, input)(x) < compileExpr[Float](child, input)(y))
                               unit[Int](-1)
-                            else if (compileExpr[Float](child)(x) > compileExpr[Float](child)(y))
+                            else if (compileExpr[Float](child, input)(x) > compileExpr[Float](child, input)(y))
                               unit[Int](1)
                             else
                               unit[Int](0)
                           }
                         else
                           (x:Rep[Record], y:Rep[Record]) => {
-                            if (compileExpr[Float](child)(x) < compileExpr[Float](child)(y))
+                            if (compileExpr[Float](child, input)(x) < compileExpr[Float](child, input)(y))
                               unit[Int](1)
-                            else if (compileExpr[Float](child)(x) > compileExpr[Float](child)(y))
+                            else if (compileExpr[Float](child, input)(x) > compileExpr[Float](child, input)(y))
                               unit[Int](-1)
                             else
                               unit[Int](0)
@@ -920,18 +920,18 @@ object Run {
                       case DoubleType =>
                         if (order == Ascending)
                           (x:Rep[Record], y:Rep[Record]) => {
-                            if (compileExpr[Double](child)(x) < compileExpr[Double](child)(y))
+                            if (compileExpr[Double](child, input)(x) < compileExpr[Double](child, input)(y))
                               unit[Int](-1)
-                            else if (compileExpr[Double](child)(x) > compileExpr[Double](child)(y))
+                            else if (compileExpr[Double](child, input)(x) > compileExpr[Double](child, input)(y))
                               unit[Int](1)
                             else
                               unit[Int](0)
                           }
                         else
                           (x:Rep[Record], y:Rep[Record]) => {
-                            if (compileExpr[Double](child)(x) < compileExpr[Double](child)(y))
+                            if (compileExpr[Double](child, input)(x) < compileExpr[Double](child, input)(y))
                               unit[Int](1)
-                            else if (compileExpr[Double](child)(x) > compileExpr[Double](child)(y))
+                            else if (compileExpr[Double](child, input)(x) > compileExpr[Double](child, input)(y))
                               unit[Int](-1)
                             else
                               unit[Int](0)
@@ -939,47 +939,45 @@ object Run {
                       case IntegerType =>
                         if (order == Ascending)
                           (x:Rep[Record], y:Rep[Record]) => {
-                            compileExpr[Int](child)(x) - compileExpr[Int](child)(y)
+                            compileExpr[Int](child, input)(x) - compileExpr[Int](child, input)(y)
                           }
                         else
                           (x:Rep[Record], y:Rep[Record]) => {
-                            compileExpr[Int](child)(y) - compileExpr[Int](child)(x)
+                            compileExpr[Int](child, input)(y) - compileExpr[Int](child, input)(x)
                           }
                       case LongType =>
                         if (order == Ascending)
                           (x:Rep[Record], y:Rep[Record]) => {
-                            (compileExpr[Long](child)(x) - compileExpr[Long](child)(y)).toInt
+                            (compileExpr[Long](child, input)(x) - compileExpr[Long](child, input)(y)).toInt
                           }
                         else
                           (x:Rep[Record], y:Rep[Record]) => {
-                            (compileExpr[Long](child)(y) - compileExpr[Long](child)(x)).toInt
+                            (compileExpr[Long](child, input)(y) - compileExpr[Long](child, input)(x)).toInt
                           }
                       case DateType =>
                         if (order == Ascending)
                           (x:Rep[Record], y:Rep[Record]) => {
-                            (date_value(compileExpr[Date](child)(x)) - date_value(compileExpr[Date](child)(y))).toInt
+                            (date_value(compileExpr[Date](child, input)(x)) - date_value(compileExpr[Date](child, input)(y))).toInt
                           }
                         else
                           (x:Rep[Record], y:Rep[Record]) => {
-                            (date_value(compileExpr[Date](child)(y)) - date_value(compileExpr[Date](child)(x))).toInt
+                            (date_value(compileExpr[Date](child, input)(y)) - date_value(compileExpr[Date](child, input)(x))).toInt
                           }
                       case StringType =>
                         if (order == Ascending)
                           (x:Rep[Record], y:Rep[Record]) => {
-                            if (compileExpr[String](child)(x) < compileExpr[String](child)(y))
+                            if (compileExpr[String](child, input)(x) < compileExpr[String](child, input)(y))
                               unit[Int](-1)
-                            else if (compileExpr[String](child)(x) > compileExpr[String](child)(y))
+                            else if (compileExpr[String](child, input)(x) > compileExpr[String](child, input)(y))
                               unit[Int](1)
                             else
                               unit[Int](0)
                           }
                         else
                           (x:Rep[Record], y:Rep[Record]) => {
-                            val left = compileExpr[String](child)(x)
-                            val right = compileExpr[String](child)(y)
-                            if (compileExpr[String](child)(x) < compileExpr[String](child)(y))
+                            if (compileExpr[String](child, input)(x) < compileExpr[String](child, input)(y))
                               unit[Int](1)
-                            else if (compileExpr[String](child)(x) > compileExpr[String](child)(y))
+                            else if (compileExpr[String](child, input)(x) > compileExpr[String](child, input)(y))
                               unit[Int](-1)
                             else
                               unit[Int](0)
@@ -990,7 +988,7 @@ object Run {
               }
             )(mfa, implicitly[SourceContext])
           case Aggregate(groupingExpr, aggregateExpr, child) =>
-            val res = compile(child, inputs)
+            val res = compile(child, input)
 
             if (aggregateExpr.length == 0)
               return res
@@ -1009,7 +1007,7 @@ object Run {
                   record_new[Record](
                     aggregateExpr.map { (p:Expression) =>
                       val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                      (getName(p), false, (x:Any) => compileExpr[Any](p)(res)(mfp))
+                      (getName(p), false, (x:Any) => compileExpr[Any](p, input)(res)(mfp))
                     }
                   )(mfo)
                 )
@@ -1029,7 +1027,7 @@ object Run {
                   groupingExpr.map {
                     (p:Expression) =>
                       val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                      (getName(p), false, {(x:Any) => compileExpr[Any](p)(rec)(mfp)})
+                      (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(rec)(mfp)})
                   }
                 )(mfk)
                 }
@@ -1047,9 +1045,9 @@ object Run {
                         val mfp = convertType(p).asInstanceOf[Manifest[Any]]
                         p match {
                           case AttributeReference(_, _, _, _) =>
-                            (getName(p), false, {(x:Any) => compileExpr[Any](p)(key)(mfp)})
+                            (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(key)(mfp)})
                           case _ =>
-                            (getName(p), false, {(x:Any) => compileExpr[Any](p)(tab)(mfp)})
+                            (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(tab)(mfp)})
                         }
                     })(mfo)
                     tmp
@@ -1059,7 +1057,7 @@ object Run {
             }
 
           case Project(projectList, child) =>
-            val res = compile(child, inputs)
+            val res = compile(child, input)
 
             // TODO handle distinc select
 
@@ -1078,24 +1076,24 @@ object Run {
               { (rec:Rep[Record]) =>
                 record_new[Record](projectList.map {
                   (p:NamedExpression) => val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                    (getName(p), false, (x:Any) => compileExpr[Any](p)(rec)(mfp))
+                    (getName(p), false, (x:Any) => compileExpr[Any](p, input)(rec)(mfp))
                   }
                 )(mfa)
               }
             )(mfb, mfa, implicitly[SourceContext])
           case Filter(condition, child) =>
-            val res = compile(child, inputs)
+            val res = compile(child, input)
             val mf = extractMF(res)
             table_where(res, { (rec:Rep[Record]) =>
-              compileExpr[Boolean](condition)(rec)
+              compileExpr[Boolean](condition, input)(rec)
             })(mf, implicitly[SourceContext])
           case Limit(value, child) =>
-            val res = compile(child, inputs)
+            val res = compile(child, input)
             res
           case a@LogicalRelation(relation, _, _) =>
             relation match {
               case relation: CsvRelation =>
-                if (preloadData) inputs(a) else {
+                if (preloadData) input(a) else {
                   trait TYPE
                   implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
                   Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]]
@@ -1105,7 +1103,7 @@ object Run {
                 locfld.setAccessible(true)
                 val optfld = relation.getClass.getDeclaredFields.filter(_.getName == "options").head
                 optfld.setAccessible(true)
-                if (preloadData) inputs(a) else {
+                if (preloadData) input(a) else {
                   trait TYPE
                   implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
                   Table.fromFile[TYPE](locfld.get(relation).asInstanceOf[ListingFileCatalog].paths.head.toString.split(":")(1), escapeDelim((optfld.get(relation).asInstanceOf[Map[String,String]] apply "delimiter").charAt(0))).asInstanceOf[Rep[Table[Record]]]
@@ -1113,15 +1111,15 @@ object Run {
               case _ => throw new RuntimeException("Relation type missing: " + relation.getClass.getName)
             }
           case Join(left, right, tpe, cond) =>
-            val resl = compile(left, inputs)
-            val resr = compile(right, inputs)
+            val resl = compile(left, input)
+            val resr = compile(right, input)
 
             val mfl = extractMF(resl)
             val mfr = extractMF(resr)
             val mfl_rec = mfl.asInstanceOf[RefinedManifest[Record]]
             val mfr_rec = mfr.asInstanceOf[RefinedManifest[Record]]
 
-            val res = compileCond(cond, mfl_rec, mfr_rec) match {
+            val res = compileCond(cond, mfl_rec, mfr_rec, input) match {
               case EquiJoin(lkey, rkey, mfk) =>
                 tpe match {
                   case Inner =>
@@ -1267,7 +1265,7 @@ object Run {
             val flc = a.getClass.getDeclaredFields.filter(_.getName == "child").head
             flc.setAccessible(true)
             val child = flc.get(a).asInstanceOf[LogicalPlan]
-            val res = compile(child, inputs)
+            val res = compile(child, input)
 
             val mfa = extractMF(res)
             val mfo = ManifestFactory.refinedType[Record](
@@ -1287,7 +1285,7 @@ object Run {
                         proj.zip(output).map {
                           case (p:Expression, q: Expression) => {
                             val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                            (getName(q), false, (x:Any) => compileExpr[Any](p)(rec)(mfp))
+                            (getName(q), false, (x:Any) => compileExpr[Any](p, input)(rec)(mfp))
                           }
                         }
                       )(mfo)
@@ -1346,17 +1344,17 @@ object Run {
       override def main() {
         println("TPC-H")
 
-        var inputs: Map[LogicalRelation,Rep[Table[Record]]] = Map()
+        var input: Map[LogicalRelation,Rep[Table[Record]]] = Map()
 
         if (preloadData) {
           tic("load")
-          inputs = preload(d)
-          toc("load", inputs.toSeq.map(_._2.size):_*)
+          input = preload(d)
+          toc("load", input.toSeq.map(_._2.size):_*)
           println("preload: Done")
-          tic("exec", inputs.toSeq.map(_._2.size):_*)
+          tic("exec", input.toSeq.map(_._2.size):_*)
         }
 
-        val res = compile(d, inputs)
+        val res = compile(d, input)
         System.out.println("Compiled")
 
         if (preloadData) {

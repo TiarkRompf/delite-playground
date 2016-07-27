@@ -2017,7 +2017,7 @@ getQuery(tpch_string, "tpch19"),
   """.stripMargin)
 )
 
-val folder = sys.env("DELITE_PLAY") + "/data/SF1/"
+val folder = "/home/gesserte/Research/data/SF1/"
 // val file = folder + "tpch_2_17_0/dbgen/lineitem.tbl"
 val file_part = folder + "part.tbl"
 val file_supplier = folder + "supplier.tbl"
