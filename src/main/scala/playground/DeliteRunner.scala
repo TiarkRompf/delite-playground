@@ -23,16 +23,16 @@ trait DeliteTestConfig {
   if (propFile.exists) props.load(new FileReader(propFile))
 
   // test parameters
-  val verbose = props.getProperty("tests.verbose", "false") != "false"
-  val verboseDefs = props.getProperty("tests.verboseDefs", "false") != "false"
-  val threads = props.getProperty("tests.threads", "1").split(",").map(_.toInt)
+  var verbose = props.getProperty("tests.verbose", "false") != "false"
+  var verboseDefs = props.getProperty("tests.verboseDefs", "false") != "false"
+  var threads = props.getProperty("tests.threads", "1").split(",").map(_.toInt)
   var cacheSyms = false /* NNOOOOOOOOOO!!!!!!!!!!!*/   //props.getProperty("tests.cacheSyms", "true").toBoolean
-  val javaHome = new File(props.getProperty("java.home", ""))
-  val scalaHome = new File(props.getProperty("scala.vanilla.home", ""))
-  val runtimeClasses = new File(props.getProperty("runtime.classes", ""))
-  val runtimeExternalProc = false // javaHome, scalaHome and runtimeClasses only required if runtimeExternalProc is true. should this be configurable? or should we just remove execTestExternal?
-  val deliteTestTargets = props.getProperty("tests.targets", "scala").split(",")
-  val useBlas = props.getProperty("tests.extern.blas", "false").toBoolean
+  var javaHome = new File(props.getProperty("java.home", ""))
+  var scalaHome = new File(props.getProperty("scala.vanilla.home", ""))
+  var runtimeClasses = new File(props.getProperty("runtime.classes", ""))
+  var runtimeExternalProc = false // javaHome, scalaHome and runtimeClasses only required if runtimeExternalProc is true. should this be configurable? or should we just remove execTestExternal?
+  var deliteTestTargets = props.getProperty("tests.targets", "scala").split(",")
+  var useBlas = props.getProperty("tests.extern.blas", "false").toBoolean
 
   var cppWhiteList = Seq("StaticData", "DeliteTestMkString", "DeliteTestAppend", "DeliteTestStrConcat", "DeliteTestFwNew", //test operations are Scala-only by design
                          "DeliteTestBwNew", "DeliteTestBwWrite", "DeliteTestBwClose", "DeliteTestPrintLn", "scala.collection.mutable.ArrayBuffer",
