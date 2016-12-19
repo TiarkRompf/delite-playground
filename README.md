@@ -33,7 +33,8 @@ Then install:
     forge$ cd ../delite
     delite$ git checkout 515eb45382b24e79b5100e787711af17479a0c71
     delite$ cd ../virtualization-lms-core
-    virtualization-lms-core$ 590519b91644207507c08d4443665f558b7dd67b
+    virtualization-lms-core$ git checkout 590519b91644207507c08d4443665f558b7dd67b
+    virtualization-lms-core$ cd ..
     hyperdsl$ git checkout 338a2cd3bb07802525b26f14109093dd78120e9c
     hyperdsl$ source init-env.sh
     hyperdsl$ sbt publish-local
