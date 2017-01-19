@@ -62,6 +62,83 @@ object Run {
 
   def escapeDelim(c: Char) = if (c == '|') "\\|" else c.toString
 
+  def filterUseless(exp: Expression): Option[Expression] = exp match {
+    case And(e1, e2)          => filterUseless(e1) match {
+      case None                 => filterUseless(e2)
+      case Some(a)              => filterUseless(e2) match {
+        case None               => Some(a)
+        case Some(b)            => Some(And(a, b))
+      }
+    }
+    case IsNotNull(_)           => None
+    case _                      => Some(exp)
+  }
+
+  def reorderString(exp: Expression): (Expression, Int) = exp match {
+    case AttributeReference(_, StringType, _, _) => (exp, 2)
+    case Literal(_, StringType) => (exp, 2)
+    case And(left, right) =>
+      val (l, ll) = reorderString(left)
+      val (r, rl) = reorderString(right)
+      if (ll > rl)
+        (And(r, l), ll)
+      else
+        (And(l, r), rl)
+    case Or(left, right) =>
+      val (l, ll) = reorderString(left)
+      val (r, rl) = reorderString(right)
+      if (ll > rl)
+        (Or(r, l), ll)
+      else
+        (Or(l, r), rl)
+    case Not(value) => val (e, l) = reorderString(value)
+      (Not(e), l)
+    case LessThan(a,b) =>
+      a.dataType match {
+        case StringType   => (exp, 2)
+        case _            => (exp, 1)
+      }
+    case LessThanOrEqual(a,b) =>
+      a.dataType match {
+        case StringType   => (exp, 2)
+        case _            => (exp, 1)
+      }
+    case GreaterThan(a,b) =>
+      a.dataType match {
+        case StringType   => (exp, 2)
+        case _            => (exp, 1)
+      }
+    case GreaterThanOrEqual(a,b) =>
+      a.dataType match {
+        case StringType   => (exp, 2)
+        case _            => (exp, 1)
+      }
+    case EqualTo(a,b) =>
+      a.dataType match {
+        case StringType   => (exp, 2)
+        case _            => (exp, 1)
+      }
+    case CaseWhen(branches, defval) => (exp, 1)
+    case CaseWhenCodegen(branches, defval) => (exp, 1)
+    case StartsWith(str, pref) => (exp, 2)
+    case EndsWith(str, suff) => (exp, 2)
+    case Contains(str, suff) => (exp, 2)
+    case Like(left, right) => (exp, 3)
+    case Substring(value, idx1, idx2) => (exp, 2)
+    case In (value, list) =>
+      value.dataType match {
+        case StringType   => (exp, 3)
+        case _            => (exp, 2)
+      }
+    case IsNull(value)    =>
+      val (e, l) = reorderString(value)
+      (IsNull(e), l)
+    case IsNotNull(value) =>
+      val (e, l) = reorderString(value)
+      (IsNotNull(e), l)
+    case _ => (exp, 1)
+  }
+
   def runDelite(d : LogicalPlan, preloadData: Boolean, debugf: Boolean = false) = {
     object DeliteQuery extends OptiQLApplicationCompiler with DeliteTestRunner {
 
@@ -406,7 +483,8 @@ object Run {
           field[T](rec, getName(d))
         case Literal(null, tpe) => nullvalue(tpe).asInstanceOf[Rep[T]]
         case Literal(value, DateType) =>
-          conv_date(value.asInstanceOf[Int]).asInstanceOf[Rep[T]]
+          val tmp = conv_date(value.asInstanceOf[Int])
+          tmp.asInstanceOf[Rep[T]]
         case Literal(value, StringType) =>
           unit[String](String.valueOf(value)).asInstanceOf[Rep[T]]
         case Literal(value, _) =>
@@ -595,13 +673,8 @@ object Run {
                     else
                       compileExpr[T](secondbranch, input)(rec)
           res.asInstanceOf[Rep[T]]
-        case a : Expression if a.getClass.getName == aggexp =>
-          // class AggregateExpression is private, so we use reflection
-          // to get around access control
-          val fld = a.getClass.getDeclaredFields.filter(_.getName == "aggregateFunction").head
-          fld.setAccessible(true)
-          val children = fld.get(a).asInstanceOf[AggregateFunction]
-          compileAggExpr[T](children, input)(rec.asInstanceOf[Rep[Table[Record]]])
+        case AggregateExpression(child, _, _, _) =>
+          compileAggExpr[T](child, input)(rec.asInstanceOf[Rep[Table[Record]]])
         case ScalarSubquery(query, children, id) =>
           val res = compile(query, null)
           val mf = extractMF(res)
@@ -1014,7 +1087,10 @@ object Run {
               )(mfo, pos, null)
             } else {
 
-              val mfk = ManifestFactory.refinedType[Record](
+              val mfk = if (groupingExpr.length == 1)
+                convertType(groupingExpr.head).asInstanceOf[Manifest[Any]]
+              else
+                ManifestFactory.refinedType[Record](
                       manifest[Record],
                       groupingExpr.map {p => getName(p)}.toList,
                       groupingExpr.map { (p:Expression) =>
@@ -1023,13 +1099,16 @@ object Run {
               val group = table_groupby(
                 res,
                 {(rec:Rep[Record]) =>
-                record_new(
-                  groupingExpr.map {
-                    (p:Expression) =>
-                      val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                      (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(rec)(mfp)})
-                  }
-                )(mfk)
+                  if (groupingExpr.length == 1)
+                    compileExpr[Any](groupingExpr.head, input)(rec)(mfk)
+                  else
+                    record_new(
+                      groupingExpr.map {
+                        (p:Expression) =>
+                          val mfp = convertType(p).asInstanceOf[Manifest[Any]]
+                          (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(rec)(mfp)})
+                      }
+                    )(mfk)
                 }
               )(mfa, mfk, pos)
 
@@ -1045,7 +1124,7 @@ object Run {
                         val mfp = convertType(p).asInstanceOf[Manifest[Any]]
                         p match {
                           case AttributeReference(_, _, _, _) =>
-                            (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(key)(mfp)})
+                            (getName(p), false, {(x:Any) => if (groupingExpr.length == 1) key else compileExpr[Any](p, input)(key)(mfp)})
                           case _ =>
                             (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(tab)(mfp)})
                         }
@@ -1083,10 +1162,17 @@ object Run {
             )(mfb, mfa, implicitly[SourceContext])
           case Filter(condition, child) =>
             val res = compile(child, input)
-            val mf = extractMF(res)
-            table_where(res, { (rec:Rep[Record]) =>
-              compileExpr[Boolean](condition, input)(rec)
-            })(mf, implicitly[SourceContext])
+            filterUseless(condition) match {
+              case Some (condition) =>
+                val (rcond, _) = reorderString(condition)
+                System.out.println("Filter removed (" + rcond + ")")
+                val mf = extractMF(res)
+                table_where(res, { (rec:Rep[Record]) =>
+                  compileExpr[Boolean](rcond, input)(rec)
+                })(mf, implicitly[SourceContext])
+              case None => // System.out.println("Filter removed (" + condition + ")")
+                res
+            }
           case Limit(value, child) =>
             val res = compile(child, input)
             res
@@ -1342,7 +1428,7 @@ object Run {
       }
 
       override def main() {
-        println("TPC-H")
+        // println("TPC-H")
 
         var input: Map[LogicalRelation,Rep[Table[Record]]] = Map()
 

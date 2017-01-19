@@ -206,7 +206,7 @@ trait TPCHBaseTrait extends OptiQLApplication with Types {
   }
 
   //timing decided at staging time so we can fuse across I/O when possible
-  val timeIO: Boolean = System.getProperty("tpch.time.io", "true") != "false"
+  val timeIO: Boolean = false // System.getProperty("tpch.time.io", "true") != "false"
   override def tic(in: Rep[Any]*)(implicit ctx: SourceContext) = {
     if (timeIO) super.tic() //start timing immediately
     else super.tic(in:_*) //start timing after input loaded
@@ -216,7 +216,7 @@ trait TPCHBaseTrait extends OptiQLApplication with Types {
 
   var tpchDataPath: Rep[String] = _
   val sep = "\\|"
-  def loadLineItems() = Table.fromFile[LineItem](tpchDataPath+"/lineitem.csv", sep)
+  def loadLineItems() = Table.fromFile[LineItem](tpchDataPath+"/lineitem.tbl", sep)
   def loadCustomers() = Table.fromFile[Customer](tpchDataPath+"/customer.tbl", sep)
   def loadNations() = Table.fromFile[Nation](tpchDataPath+"/nation.tbl", sep)
   def loadOrders() = Table.fromFile[Order](tpchDataPath+"/orders.tbl", sep)
@@ -316,12 +316,13 @@ object Q1_Runner {
   def testRun(base: String) = {
     object TPCHQ1Compiler extends OptiQLApplicationCompiler with TPCHQ1Trait with DeliteTestRunner {
       override def main() {
+        System.out.println("Hello")
         println("TPC-H " + queryName)
-        tpchDataPath = unit(base)
-        query()
+        // tpchDataPath = unit(base)
+        // query()
       }
     }
-  DeliteRunner.compileAndTest(TPCHQ1Compiler)
+    DeliteRunner.compileAndTest(TPCHQ1Compiler)
   }
 
   def main(args: Array[String]) {
