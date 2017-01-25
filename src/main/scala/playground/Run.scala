@@ -30,28 +30,31 @@ object Run {
   val aggexp = "org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression"
   val expcl = "org.apache.spark.sql.catalyst.plans.logical.Expand"
 
-  def convertDataType(e: DataType) : Manifest[_] = e match {
+  def convertDataType(e: DataType, metadata: Metadata = null) : Manifest[_] = e match {
       case ByteType => manifest[Char]
       case BooleanType => manifest[Boolean]
       case IntegerType => manifest[Int]
       case LongType => manifest[Long]
       case DoubleType => manifest[Double]
       case DateType => manifest[java.util.Date]
-      case StringType => manifest[String]
-      case StructType(fields) =>
-        val names = fields map {
-          case StructField(name,tpe,nullable,metadata) => name
-        }
-        val elems = fields map {
-          case StructField(name,tpe,nullable,metadata) => convertDataType(tpe)
-        }
-        ManifestFactory.refinedType[Record](manifest[Record], names.toList, elems.toList)
+      case StringType => if (metadata != null && metadata.contains("length") && metadata.getLong("length") == 1) {
+        manifest[Char]
+      } else manifest[String]
+      // case StructType(fields) =>
+      //   val names = fields map {
+      //     case StructField(name,tpe,nullable,metadata) => name
+      //   }
+      //   val elems = fields map {
+      //     case StructField(name,tpe,nullable,metadata) => convertDataType(tpe,metadata)
+      //   }
+      //   ManifestFactory.refinedType[Record](manifest[Record], names.toList, elems.toList)
       case _ => throw new RuntimeException("convertDataType, TODO: " + e.toString)
   }
 
   def convertType(e: Expression): Manifest[_] = e match {
     case Count(_) => manifest[Long]
     case Alias(Count(_), _) => manifest[Long]
+    case AttributeReference(_,tpe,_,metadata) => convertDataType(tpe,metadata)
     case _ => convertDataType(e.dataType)
   }
 
@@ -395,10 +398,15 @@ object Run {
 
       }
 
-      def convertAttribRefsType(fields: Seq[AttributeReference]) : Manifest[_] = {
+      val metadatas = scala.collection.mutable.HashMap[String,Long]()
+      def convertAttribRefsType(fields: Seq[AttributeReference]) : RefinedManifest[Record] = {
         val names = fields map (a => getName(a))
-        val elems = fields map (a => convertDataType(a.dataType))
-        ManifestFactory.refinedType[Record](manifest[Record], names.toList, elems.toList)
+        val elems = fields map (a => convertDataType(a.dataType, a.metadata))
+        fields foreach {
+          case a@AttributeReference(name, StringType, _, metadata) => if (metadata contains "length") metadatas += (getName(a) -> (metadata getLong "length"))
+          case _                                                 => ()
+        }
+        ManifestFactory.refinedType[Record](manifest[Record], names.toList, elems.toList).asInstanceOf[RefinedManifest[Record]]
       }
 
       def isnull(value: Expression, input: Map[LogicalRelation,Rep[Table[Record]]])(l: Rep[Record]): Rep[Boolean] = {
@@ -411,6 +419,7 @@ object Run {
             case StringType   => compileExpr[String](value, input)(l) == strnull
           }
       }
+
 
       def compileAggExpr[T:Manifest](d: AggregateFunction, input: Map[LogicalRelation,Rep[Table[Record]]])(rec: Rep[Table[Record]]): Rep[T] = d match {
         case Sum(child) =>
@@ -960,6 +969,51 @@ object Run {
         res
       }
 
+      def infix_+(x: Int, y: Option[Int]): Option[Int] = y match {
+        case None => None
+        case Some(y) => Some(x + y)
+      }
+
+      def recordSize(seq: List[(String, Manifest[_])]): Option[Int] = seq match {
+        case (_, t) :: q if t == manifest[Char]           => 1 + recordSize(q)
+        case (_, t) :: q if t == manifest[Boolean]        => None
+        case (_, t) :: q if t == manifest[Int]            => 4 + recordSize(q)
+        case (_, t) :: q if t == manifest[Long]           => 8 + recordSize(q)
+        case (_, t) :: q if t == manifest[Double]         => None
+        case (_, t) :: q if t == manifest[java.util.Date] => 8 + recordSize(q)
+        case (_, t) :: q if t == manifest[String]         => None
+        case Nil                                          => Some(0)
+      }
+
+      def keySelection(groupingExpr: Seq[Expression])(implicit input: Map[LogicalRelation,Rep[Table[Record]]]): (Manifest[Any], Rep[Record] => Rep[Any]) = groupingExpr match {
+        case Seq() => throw new RuntimeException("Nothing to group by")
+        case Seq(exp) =>
+          val mfk = convertType(exp).asInstanceOf[Manifest[Any]]
+          (mfk, compileExpr[Any](exp, input)(_)(mfk))
+        case _ =>
+          val mfk = ManifestFactory.refinedType[Record](
+                manifest[Record],
+                groupingExpr.map { p => getName(p) }.toList,
+                groupingExpr.map { (p:Expression) =>
+                    convertType(p).asInstanceOf[Manifest[_]] }.toList).asInstanceOf[Manifest[Any]]
+
+
+          val size = recordSize(mfk.asInstanceOf[RefinedManifest[Record]].fields)
+          if (true /* size == None || size.get > 8 */)
+            (mfk, (rec: Rep[Record]) => record_new(
+               groupingExpr.map {
+                 (p:Expression) => (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(rec)(convertType(p).asInstanceOf[Manifest[Any]])})
+               }
+             )(mfk))
+          else
+            (manifest[Long].asInstanceOf[Manifest[Any]], (rec: Rep[Record]) => (groupingExpr :\ unit[Long](0L).asInstanceOf[Rep[Long]]) {
+              case (exp: Expression, agg: Rep[Long]) => convertType(exp) match {
+                case man if (man == manifest[Char]) => agg // 256L * agg + compileExpr[Char](exp,input)(rec)(manifest[Char]).asInstanceOf[Rep[Long]]
+                case man if (man == manifest[Int])  => agg // 256L * 256L * 256L * 256L * agg + compileExpr[Int](exp,input)(rec)(manifest[Int]).asInstanceOf[Rep[Long]]
+              }
+            })
+      }
+
       def compile(d: LogicalPlan, input: Map[LogicalRelation,Rep[Table[Record]]]): Rep[Table[Record]] = {
         val sol = d match {
           case Sort(sortingExpr, global, child) =>
@@ -1087,44 +1141,30 @@ object Run {
               )(mfo, pos, null)
             } else {
 
-              val mfk = if (groupingExpr.length == 1)
-                convertType(groupingExpr.head).asInstanceOf[Manifest[Any]]
-              else
-                ManifestFactory.refinedType[Record](
-                      manifest[Record],
-                      groupingExpr.map {p => getName(p)}.toList,
-                      groupingExpr.map { (p:Expression) =>
-                          convertType(p).asInstanceOf[Manifest[_]]}.toList).asInstanceOf[Manifest[Any]]
+
+              val (mfk, keySelect) = keySelection(groupingExpr)(input)
 
               val group = table_groupby(
                 res,
-                {(rec:Rep[Record]) =>
-                  if (groupingExpr.length == 1)
-                    compileExpr[Any](groupingExpr.head, input)(rec)(mfk)
-                  else
-                    record_new(
-                      groupingExpr.map {
-                        (p:Expression) =>
-                          val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                          (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(rec)(mfp)})
-                      }
-                    )(mfk)
-                }
+                keySelect
               )(mfa, mfk, pos)
 
 
               val mfg = extractMF(group)
+              System.out.println(mfg)
               val tmp = table_select(
                   group,
                   { (coup:Rep[Tup2[Any, Table[Record]]]) =>
                     val key = tup2__1(coup)(mfk, pos)
                     val tab = tup2__2(coup)(res.tp.asInstanceOf[Manifest[Table[Record]]],pos)
                     val tmp = record_new[Record](aggregateExpr.map {
-                      (p:NamedExpression) =>
+                      (p: Expression) =>
                         val mfp = convertType(p).asInstanceOf[Manifest[Any]]
                         p match {
                           case AttributeReference(_, _, _, _) =>
-                            (getName(p), false, {(x:Any) => if (groupingExpr.length == 1) key else compileExpr[Any](p, input)(key)(mfp)})
+                            (getName(p), false, {(x:Any) => if (groupingExpr.length == 1) key else {
+                              compileExpr(p, input)(key)(mfp)
+                              }})
                           case _ =>
                             (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(tab)(mfp)})
                         }

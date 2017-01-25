@@ -46,7 +46,7 @@ trait Type { this: OptiQLApplication =>
 
 trait Test extends OptiQLApplication with Types {
   def query() = {
-    val tab = Table.fromFile[LineItem]("/home/greg/Research/data/lineitem.tbl", ("\\|"))
+    val tab = Table.fromFile[LineItem]("/home/greg/Research/data/SF1/lineitem.tbl", ("\\|"))
 
     tic(tab.size)
     val q = tab Where(_.l_shipdate <= Date("1998-09-02")) GroupBy(l => pack(l.l_returnflag,l.l_linestatus)) Select(g => new Record {
@@ -64,7 +64,6 @@ trait Test extends OptiQLApplication with Types {
     toc(q)
     q.printAsTable()
   }
-
 }
 
 object TPCH1 {
@@ -74,6 +73,6 @@ object TPCH1 {
         query()
       }
     }
-    DeliteRunner.compileAndTest(DeliteQuery)
+  DeliteRunner.compileAndTest(DeliteQuery)
   }
 }

@@ -2031,6 +2031,8 @@ val file_region = folder + "region.tbl"
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
 
+def stringLength(n: Int) = Metadata.fromJson("{ \"length\" : " + n + "}")
+
 val schema_part = StructType(Seq(
   StructField("p_partkey", IntegerType, nullable = false),
   StructField("p_name", StringType, nullable = false),
@@ -2047,7 +2049,7 @@ val schema_supplier = StructType(Seq(
   StructField("s_name", StringType, nullable = false),
   StructField("s_address", StringType, nullable = false),
   StructField("s_nationkey", IntegerType, nullable = false),
-  StructField("s_phone", StringType, nullable = false),
+  StructField("s_phone", StringType, nullable = false, metadata = stringLength(15)),
   StructField("s_acctbal", DoubleType, nullable = false),
   StructField("s_comment", StringType, nullable = false)))
 
@@ -2063,7 +2065,7 @@ val schema_customer = StructType(Seq(
   StructField("c_name", StringType, nullable = false),
   StructField("c_address", StringType, nullable = false),
   StructField("c_nationkey", IntegerType, nullable = false),
-  StructField("c_phone", StringType, nullable = false),
+  StructField("c_phone", StringType, nullable = false, metadata = stringLength(15)),
   StructField("c_acctbal", DoubleType, nullable = false),
   StructField("c_mktsegment", StringType, nullable = false),
   StructField("c_comment", StringType, nullable = false)))
@@ -2071,11 +2073,11 @@ val schema_customer = StructType(Seq(
 val schema_orders = StructType(Seq(
   StructField("o_orderkey", IntegerType, nullable = false),
   StructField("o_custkey", IntegerType, nullable = false),
-  StructField("o_orderstatus", StringType, nullable = false),
+  StructField("o_orderstatus", StringType, nullable = false, metadata = stringLength(1)),
   StructField("o_totalprice", DoubleType, nullable = false),
   StructField("o_orderdate", DateType, nullable = false),
   StructField("o_orderpriority", StringType, nullable = false),
-  StructField("o_clerk", StringType, nullable = false),
+  StructField("o_clerk", StringType, nullable = false, metadata = stringLength(15)),
   StructField("o_shippriority", IntegerType, nullable = false),
   StructField("o_comment", StringType, nullable = false)))
 
@@ -2088,8 +2090,8 @@ val schema_lineitem = StructType(Seq(
   StructField("l_extendedprice", DoubleType, nullable = false),
   StructField("l_discount", DoubleType, nullable = false),
   StructField("l_tax", DoubleType, nullable = false),
-  StructField("l_returnflag", StringType, nullable = false), // Char
-  StructField("l_linestatus", StringType, nullable = false),
+  StructField("l_returnflag", StringType, nullable = false, metadata = stringLength(1)), // Char
+  StructField("l_linestatus", StringType, nullable = false, metadata = stringLength(1)),
   StructField("l_shipdate", DateType, nullable = false),
   StructField("l_commitdate", DateType, nullable = false),
   StructField("l_receiptdate", DateType, nullable = false),
@@ -2302,3 +2304,28 @@ def runbenchmark(iterations: Int, queries: String = "1,2,3,4,5,6,7,8,9,10,11,12,
       })
   }
 }
+
+val tpch1 =
+        """
+          |select
+          |   l_returnflag,
+          |   l_linestatus,
+          |   sum(l_quantity) as sum_qty,
+          |   sum(l_extendedprice) as sum_base_price,
+          |   sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
+          |   sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
+          |   avg(l_quantity) as avg_qty,
+          |   avg(l_extendedprice) as avg_price,
+          |   avg(l_discount) as avg_disc,
+          |   count(*) as count_order
+          |from
+          |   lineitem
+          |where
+          |   l_shipdate <= to_date('1998-09-02')
+          |group by
+          |   l_returnflag,
+          |   l_linestatus
+          |order by
+          |   l_returnflag,
+          |   l_linestatus
+        """.stripMargin
