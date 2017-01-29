@@ -15,9 +15,8 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.execution.datasources.ListingFileCatalog
 
-import optiql.compiler._
-import optiql.library._
-import optiql.shared._
+import ppl.dsl.optiql._
+import ppl.dsl.optiql.ops._
 import scala.reflect.{Manifest,SourceContext,ManifestFactory,RefinedManifest}
 import scala.virtualization.lms.common.{Record, TupleOps}
 import scala.math.Ordering
@@ -30,7 +29,8 @@ object Run {
   val aggexp = "org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression"
   val expcl = "org.apache.spark.sql.catalyst.plans.logical.Expand"
 
-  def convertDataType(e: DataType, metadata: Metadata = null) : Manifest[_] = e match {
+  def convertDataType(e: DataType, metadata: Metadata = null) : Manifest[Any] = {
+    val tmp = e match {
       case ByteType => manifest[Char]
       case BooleanType => manifest[Boolean]
       case IntegerType => manifest[Int]
@@ -49,6 +49,8 @@ object Run {
       //   }
       //   ManifestFactory.refinedType[Record](manifest[Record], names.toList, elems.toList)
       case _ => throw new RuntimeException("convertDataType, TODO: " + e.toString)
+    }
+    tmp.asInstanceOf[Manifest[Any]]
   }
 
   def convertType(e: Expression): Manifest[_] = e match {
@@ -56,6 +58,35 @@ object Run {
     case Alias(Count(_), _) => manifest[Long]
     case AttributeReference(_,tpe,_,metadata) => convertDataType(tpe,metadata)
     case _ => convertDataType(e.dataType)
+  }
+
+  def orderDataType(e: DataType, metadata: Metadata = null) : Ordering[Any] = {
+    val tmp  = e match {
+      case ByteType => implicitly[Ordering[Char]]
+      case BooleanType => implicitly[Ordering[Boolean]]
+      case IntegerType => implicitly[Ordering[Int]]
+      case LongType => implicitly[Ordering[Long]]
+      case DoubleType => implicitly[Ordering[Double]]
+      case DateType => implicitly[Ordering[Int]]
+      case StringType => if (metadata != null && metadata.contains("length") && metadata.getLong("length") == 1) {
+        implicitly[Ordering[Char]]
+      } else implicitly[Ordering[String]]
+      // case StructType(fields) =>
+      //   val names = fields map {
+      //     case StructField(name,tpe,nullable,metadata) => name
+      //   }
+      //   val elems = fields map {
+      //     case StructField(name,tpe,nullable,metadata) => convertDataType(tpe,metadata)
+      //   }
+      //   ManifestFactory.refinedType[Record](manifest[Record], names.toList, elems.toList)
+      case _ => throw new RuntimeException("orderDataType, TODO: " + e.toString)
+    }
+    tmp.asInstanceOf[Ordering[Any]]
+  }
+
+  def orderType(e: Expression): Ordering[_] = e match {
+    case AttributeReference(_,tpe,_,metadata) => orderDataType(tpe,metadata)
+    case _ => orderDataType(e.dataType)
   }
 
   def getType(e: Option[Expression]) : Manifest[_] = e match {
@@ -143,215 +174,215 @@ object Run {
   }
 
   def runDelite(d : LogicalPlan, preloadData: Boolean, debugf: Boolean = false) = {
-    object DeliteQuery extends OptiQLApplicationCompiler with DeliteTestRunner {
+    object DeliteQuery extends OptiQLApplicationRunner with DeliteTestRunner {
 
       // ### begin modified code for groupBy fusion from hyperdsl ###
-      private def hashReduce[A:Manifest,K:Manifest,T:Manifest,R:Manifest](resultSelector: Exp[T] => Exp[R], keySelector: Exp[A] => Exp[K]): Option[(Exp[A]=>Exp[R], (Exp[R],Exp[R])=>Exp[R], (Exp[R],Exp[Int])=>Exp[R])] = {
-        var failed: Boolean = false
-        val ctx = implicitly[SourceContext]
-        def rewriteMap(value: Exp[Any]): Exp[A]=>Exp[R] = (value match {
-          case Def(Field(Def(Field(s,"_1")),index)) => (a:Exp[A]) => field(keySelector(a),index)(value.tp,ctx)
-          case Def(Field(s,"_1")) => keySelector
-          case Def(Field(Def(Field(s,"_2")),index)) => (a:Exp[A]) => field(keySelector(a),index)(value.tp,ctx) // we know that it must be part of the selector ....
-          case Def(Table_Sum(s, sumSelector)) => sumSelector
-          case Def(Table_Average(s, avgSelector)) => avgSelector
-          case Def(Table1_Count(s, f)) => (a:Exp[A]) => if (f(a)) { unit(1) } else { unit(0) }
-          case Def(Table2_Count(s)) => (a:Exp[A]) => unit(1)
-          case Def(Table_Max(s, maxSelector)) => maxSelector
-          case Def(Table_Min(s, minSelector)) => minSelector
-          case Def(Internal_pack2(u,v)) => (a: Exp[A]) =>
-            pack(rewriteMap(u)(a), rewriteMap(v)(a))(mtype(u.tp),mtype(v.tp),ctx,implicitly)
-          // TODO: Spark/Delite
-          case Def(a) => Console.err.println("found unknown map: " + a.toString); failed = true; null
-          case _ => Console.err.println("found unknown map: " + value.toString); failed = true; null
-        }).asInstanceOf[Exp[A]=>Exp[R]]
+      // private def hashReduce[A:Manifest,K:Manifest,T:Manifest,R:Manifest](resultSelector: Exp[T] => Exp[R], keySelector: Exp[A] => Exp[K]): Option[(Exp[A]=>Exp[R], (Exp[R],Exp[R])=>Exp[R], (Exp[R],Exp[Int])=>Exp[R])] = {
+      //   var failed: Boolean = false
+      //   val ctx = implicitly[SourceContext]
+      //   def rewriteMap(value: Exp[Any]): Exp[A]=>Exp[R] = (value match {
+      //     case Def(Field(Def(Field(s,"_1")),index)) => (a:Exp[A]) => field(keySelector(a),index)(value.tp,ctx)
+      //     case Def(Field(s,"_1")) => keySelector
+      //     case Def(Field(Def(Field(s,"_2")),index)) => (a:Exp[A]) => field(keySelector(a),index)(value.tp,ctx) // we know that it must be part of the selector ....
+      //     case Def(QueryableSum(s, sumSelector)) => sumSelector
+      //     case Def(QueryableAverage(s, avgSelector)) => avgSelector
+      //     case Def(QueryableCountWhere(s, f)) => (a:Exp[A]) => if (f(a)) { unit(1) } else { unit(0) }
+      //     case Def(QueryableCount(s)) => (a:Exp[A]) => unit(1)
+      //     case Def(QueryableMax(s, maxSelector)) => maxSelector
+      //     case Def(QueryableMin(s, minSelector)) => minSelector
+      //     // case Def(Internal_pack2(u,v)) => (a: Exp[A]) =>
+      //     //   pack(rewriteMap(u)(a), rewriteMap(v)(a))(mtype(u.tp),mtype(v.tp),ctx,implicitly)
+      //     // TODO: Spark/Delite
+      //     case Def(a) => Console.err.println("found unknown map: " + a.toString); failed = true; null
+      //     case _ => Console.err.println("found unknown map: " + value.toString); failed = true; null
+      //   }).asInstanceOf[Exp[A]=>Exp[R]]
 
-        def rewriteReduce[N](value: Exp[Any]): (Exp[N],Exp[N])=>Exp[N] = (value match {
-          case Def(Field(Def(Field(s,"_1")),index)) => (a:Exp[N],b:Exp[N]) => a
-          case Def(Field(s,"_1")) => (a:Exp[N],b:Exp[N]) => a
-          case Def(Field(Def(Field(s,"_2")),index)) => (a:Exp[N],b:Exp[N]) => a
-          case Def(d@Table_Sum(_,_)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(d._numR),mtype(d._mR),ctx)
-          case Def(d@Table_Average(_,_)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(d._numR),mtype(d._mR),ctx)
-          case Def(d@Table2_Count(s)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(implicitly[Numeric[Int]]),mtype(manifest[Int]),ctx)
-          case Def(d@Table1_Count(s, f)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(implicitly[Numeric[Int]]),mtype(manifest[Int]),ctx)
-          case Def(d@Table_Max(_,_)) => (a:Exp[N],b:Exp[N]) => ordering_max(a,b)(otype(d._ordR),mtype(d._mR),ctx)
-          case Def(d@Table_Min(_,_)) => (a:Exp[N],b:Exp[N]) => ordering_min(a,b)(otype(d._ordR),mtype(d._mR),ctx)
-          case Def(d@Internal_pack2(u,v)) => (a:Exp[Tup2[N,N]],b:Exp[Tup2[N,N]]) =>
-            pack(rewriteReduce(u)(tup2__1(a)(mtype(u.tp),ctx),tup2__1(b)(mtype(u.tp),ctx)),
-                 rewriteReduce(v)(tup2__2(a)(mtype(v.tp),ctx),tup2__2(b)(mtype(v.tp),ctx)))(mtype(u.tp),mtype(v.tp),ctx,implicitly)
-          case Def(a) => Console.err.println("found unknown reduce: " + a.toString); failed = true; null
-          case _ => Console.err.println("found unknown reduce: " + value.toString); failed = true; null
-        }).asInstanceOf[(Exp[N],Exp[N])=>Exp[N]]
+      //   def rewriteReduce[N](value: Exp[Any]): (Exp[N],Exp[N])=>Exp[N] = (value match {
+      //     case Def(Field(Def(Field(s,"_1")),index)) => (a:Exp[N],b:Exp[N]) => a
+      //     case Def(Field(s,"_1")) => (a:Exp[N],b:Exp[N]) => a
+      //     case Def(Field(Def(Field(s,"_2")),index)) => (a:Exp[N],b:Exp[N]) => a
+      //     case Def(d@QueryableSum(_,_)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(d._numR),mtype(d._mR),ctx)
+      //     case Def(d@QueryableAverage(_,_)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(d._numR),mtype(d._mR),ctx)
+      //     case Def(d@QueryableCountWhere(s)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(implicitly[Numeric[Int]]),mtype(manifest[Int]),ctx)
+      //     case Def(d@QueryableCount(s, f)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(implicitly[Numeric[Int]]),mtype(manifest[Int]),ctx)
+      //     case Def(d@QueryableMax(_,_)) => (a:Exp[N],b:Exp[N]) => ordering_max(a,b)(otype(d._ordR),mtype(d._mR),ctx)
+      //     case Def(d@QueryableMin(_,_)) => (a:Exp[N],b:Exp[N]) => ordering_min(a,b)(otype(d._ordR),mtype(d._mR),ctx)
+      //     // case Def(d@Internal_pack2(u,v)) => (a:Exp[Tup2[N,N]],b:Exp[Tup2[N,N]]) =>
+      //     //   pack(rewriteReduce(u)(tup2__1(a)(mtype(u.tp),ctx),tup2__1(b)(mtype(u.tp),ctx)),
+      //     //        rewriteReduce(v)(tup2__2(a)(mtype(v.tp),ctx),tup2__2(b)(mtype(v.tp),ctx)))(mtype(u.tp),mtype(v.tp),ctx,implicitly)
+      //     case Def(a) => Console.err.println("found unknown reduce: " + a.toString); failed = true; null
+      //     case _ => Console.err.println("found unknown reduce: " + value.toString); failed = true; null
+      //   }).asInstanceOf[(Exp[N],Exp[N])=>Exp[N]]
 
-        def rewriteAverage[N](value: Exp[Any]): (Exp[N],Exp[Int])=>Exp[N] = (value match {
-          case Def(d@Table_Average(_,_)) => (a:Exp[N],count:Exp[Int]) => fractional_div(a, count.asInstanceOf[Exp[N]])(mtype(d._mR),frtype(d._fracR),mtype(d._mR),ctx,implicitly[Rep[N]=>Rep[N]])
-          case _ => (a:Exp[N],count:Exp[N]) => a
-        }).asInstanceOf[(Exp[N],Exp[Int])=>Exp[N]]
-
-
-        val funcs = resultSelector(fresh[T]) match {
-          case Def(Struct(tag: StructTag[R], elems)) =>
-            val valueFunc = (a:Exp[A]) => struct[R](tag, elems map { case (key, value) => (key, rewriteMap(value)(a)) })
-            val reduceFunc = (a:Exp[R],b:Exp[R]) => struct[R](tag, elems map { case (key, value) => (key, rewriteReduce(value)(field(a,key)(value.tp,ctx), field(b,key)(value.tp,ctx))) })
-            val averageFunc = (a:Exp[R],count:Exp[Int]) => struct[R](tag, elems map { case (key, value) => (key, rewriteAverage(value)(field(a,key)(value.tp,ctx), count)) })
-            (valueFunc, reduceFunc, averageFunc)
-
-          case a => (rewriteMap(a), rewriteReduce[R](a), rewriteAverage[R](a))
-        }
-
-        if (failed) None else Some(funcs)
-      }
-
-      def table_selectA[A:Manifest,R:Manifest](self: Rep[Table[A]], resultSelector: (Rep[A]) => Rep[R])(implicit __pos: SourceContext): Exp[Table[R]] = self match {
-        //case Def(QueryableWhere(origS, predicate)) => //Where-Select fusion
-        //  QueryableSelectWhere(origS, resultSelector, predicate)
-        case Def(g@Table_GroupBy(origS: Exp[Table[a]], keySelector)) => hashReduce(resultSelector, keySelector)(g._mA,g._mK,manifest[A],manifest[R]) match {
-          case Some((valueFunc, reduceFunc, averageFunc)) =>
-            //Console.err.println("fused GroupBy-Select")
-            val hr = groupByReduce(origS, keySelector, valueFunc, reduceFunc, (e:Exp[a]) => unit(true))(g._mA,g._mK,manifest[R],implicitly[SourceContext])
-            val count = groupByReduce(origS, keySelector, (e:Exp[a]) => unit(1), (a:Exp[Int],b:Exp[Int])=>forge_int_plus(a,b), (e:Exp[a])=>unit(true))(g._mA,g._mK,manifest[Int],implicitly[SourceContext])
-            bulkDivide(hr, count, averageFunc)(manifest[R],implicitly[SourceContext])
-          case None =>
-            Console.err.println("WARNING: unable to fuse GroupBy-Select")
-            return super.table_select(self, resultSelector)
-        }
-        case Def(g@Table_GroupByWhere(origS: Exp[Table[a]], keySelector, cond)) => hashReduce(resultSelector, keySelector)(g._mA,g._mK,manifest[A],manifest[R]) match {
-          case Some((valueFunc, reduceFunc, averageFunc)) =>
-            //Console.err.println("fused GroupBy-Select")
-            val hr = groupByReduce(origS, keySelector, valueFunc, reduceFunc, cond)(g._mA,g._mK,manifest[R],implicitly[SourceContext])
-            val count = groupByReduce(origS, keySelector, (e:Exp[a]) => unit(1), (a:Exp[Int],b:Exp[Int])=>forge_int_plus(a,b), cond)(g._mA,g._mK,manifest[Int],implicitly[SourceContext])
-            bulkDivide(hr, count, averageFunc)(manifest[R],implicitly[SourceContext])
-          case None =>
-            Console.err.println("WARNING: unable to fuse GroupBy-Select")
-            return super.table_select(self, resultSelector)
-        }
-        case _ => super.table_select(self, resultSelector)
-      }
+      //   def rewriteAverage[N](value: Exp[Any]): (Exp[N],Exp[Int])=>Exp[N] = (value match {
+      //     case Def(d@QueryableAverage(_,_)) => (a:Exp[N],count:Exp[Int]) => fractional_div(a, count.asInstanceOf[Exp[N]])(mtype(d._mR),frtype(d._fracR),mtype(d._mR),ctx,implicitly[Rep[N]=>Rep[N]])
+      //     case _ => (a:Exp[N],count:Exp[N]) => a
+      //   }).asInstanceOf[(Exp[N],Exp[Int])=>Exp[N]]
 
 
+      //   val funcs = resultSelector(fresh[T]) match {
+      //     case Def(Struct(tag: StructTag[R], elems)) =>
+      //       val valueFunc = (a:Exp[A]) => struct[R](tag, elems map { case (key, value) => (key, rewriteMap(value)(a)) })
+      //       val reduceFunc = (a:Exp[R],b:Exp[R]) => struct[R](tag, elems map { case (key, value) => (key, rewriteReduce(value)(field(a,key)(value.tp,ctx), field(b,key)(value.tp,ctx))) })
+      //       val averageFunc = (a:Exp[R],count:Exp[Int]) => struct[R](tag, elems map { case (key, value) => (key, rewriteAverage(value)(field(a,key)(value.tp,ctx), count)) })
+      //       (valueFunc, reduceFunc, averageFunc)
 
-      override def table_select[A:Manifest,R:Manifest](self: Rep[Table[A]], resultSelector: (Rep[A]) => Rep[R])(implicit __pos: SourceContext): Exp[Table[R]] = {
-        def sel1(a: Rep[R]): Rep[R] = (a match {
-          // right now only a/b is supported. TODO: add a+b etc
-          case Def(Primitive_Forge_double_divide(a,b)) =>
-            val a1 = a/*rewriteMap(a)(e)*/.asInstanceOf[Exp[Double]] // should we recurse here?
-            val b1 = b/*rewriteMap(b)(e)*/.asInstanceOf[Exp[Double]]
-            pack(a1,b1)
-          case Def(Primitive_Forge_double_times(Const(c),b)) => b // TODO: more general case
-          case Def(Ordering_Gt(a,b@Const(c))) => a
-          case Def(Ordering_Gt(a,b)) =>
-            val a1 = a/*rewriteMap(a)(e)*/.asInstanceOf[Exp[Double]] // should we recurse here?
-            val b1 = b/*rewriteMap(b)(e)*/.asInstanceOf[Exp[Double]]
-            pack(a1,b1)
-          case Def(Struct(tag: StructTag[R], elems)) =>
-            struct[R](tag, elems map { case (key, value) => (key, sel1(value.asInstanceOf[Rep[R]])) })
-          case _ => a
-        }).asInstanceOf[Rep[R]]
+      //     case a => (rewriteMap(a), rewriteReduce[R](a), rewriteAverage[R](a))
+      //   }
 
-        def sel2(a: Rep[R])(v: Rep[R]): Rep[R] = (a match {
-          case Def(Primitive_Forge_double_divide(a,b)) =>
-            val v1 = v.asInstanceOf[Rep[Tup2[Double,Double]]]
-            val a1 = tup2__1(v1)/*sel2(a)(v._1)*/.asInstanceOf[Exp[Double]] // should we recurse here?
-            val b1 = tup2__2(v1)/*sel2(b)(v._2)*/.asInstanceOf[Exp[Double]]
-            primitive_forge_double_divide(a1,b1)
-          case Def(Primitive_Forge_double_times(Const(c:Double),b)) => // TODO: handle more general case
-            primitive_forge_double_times(Const(c),v.asInstanceOf[Rep[Double]])
-          case Def(d@Ordering_Gt(a,b@Const(c))) => ordering_gt(v,b)(d._ordA,d._mA,__pos)
-          case Def(d@Ordering_Gt(a,b)) =>
-            val v1 = v.asInstanceOf[Rep[Tup2[Double,Double]]]
-            val a1 = tup2__1(v1)/*sel2(a)(v._1)*/.asInstanceOf[Exp[Double]] // should we recurse here?
-            val b1 = tup2__2(v1)/*sel2(b)(v._2)*/.asInstanceOf[Exp[Double]]
-            assert(d._mA == manifest[Double], "FIXME: only supporting Ordering[Double]")
-            ordering_gt(a1,b1)(d._ordA.asInstanceOf[Ordering[Double]],manifest[Double],__pos)
-          case Def(Struct(tag: StructTag[R], elems)) =>
-            struct[R](tag, elems map { case (key, value) =>
-              (key, sel2(value.asInstanceOf[Rep[R]])(field[R](v,key)(mtype(value.tp),__pos))) })
-          case _ => v
-        }).asInstanceOf[Rep[R]]
+      //   if (failed) None else Some(funcs)
+      // }
 
-        def tpe1(a: Rep[R]): Manifest[R] = (a match {
-          case Def(Primitive_Forge_double_divide(a,b)) => manifest[Tup2[Double,Double]]
-          case Def(Primitive_Forge_double_times(Const(c),b)) => b.tp
-          case Def(Ordering_Gt(a,b@Const(c))) => a.tp
-          case Def(d@Ordering_Gt(a,b)) =>
-            assert(d._mA == manifest[Double], "FIXME: only supporting Ordering[Double]")
-            manifest[Tup2[Double,Double]]
-          case Def(Struct(tag: StructTag[R], elems)) =>
-            val em = elems map { case (key, value) => (key, tpe1(value.asInstanceOf[Rep[R]])) }
-            ManifestFactory.refinedType[Record](manifest[Record], em.map(_._1).toList, em.map(_._2).toList)
-          case _ => a.tp
-        }).asInstanceOf[Manifest[R]]
+      // def table_selectA[A:Manifest,R:Manifest](self: Rep[Table[A]], resultSelector: (Rep[A]) => Rep[R])(implicit __pos: SourceContext): Exp[Table[R]] = self match {
+      //   //case Def(QueryableWhere(origS, predicate)) => //Where-Select fusion
+      //   //  QueryableSelectWhere(origS, resultSelector, predicate)
+      //   case Def(g@QueryableGroupBy(origS: Exp[Table[a]], keySelector)) => hashReduce(resultSelector, keySelector)(g._mA,g._mK,manifest[A],manifest[R]) match {
+      //     case Some((valueFunc, reduceFunc, averageFunc)) =>
+      //       //Console.err.println("fused GroupBy-Select")
+      //       val hr = groupByReduce(origS, keySelector, valueFunc, reduceFunc, (e:Exp[a]) => unit(true))(g._mA,g._mK,manifest[R],implicitly[SourceContext])
+      //       val count = groupByReduce(origS, keySelector, (e:Exp[a]) => unit(1), (a:Exp[Int],b:Exp[Int])=>forge_int_plus(a,b), (e:Exp[a])=>unit(true))(g._mA,g._mK,manifest[Int],implicitly[SourceContext])
+      //       bulkDivide(hr, count, averageFunc)(manifest[R],implicitly[SourceContext])
+      //     case None =>
+      //       Console.err.println("WARNING: unable to fuse GroupBy-Select")
+      //       return super.table_select(self, resultSelector)
+      //   }
+      //   case Def(g@QueryableGroupByWhere(origS: Exp[Table[a]], keySelector, cond)) => hashReduce(resultSelector, keySelector)(g._mA,g._mK,manifest[A],manifest[R]) match {
+      //     case Some((valueFunc, reduceFunc, averageFunc)) =>
+      //       //Console.err.println("fused GroupBy-Select")
+      //       val hr = groupByReduce(origS, keySelector, valueFunc, reduceFunc, cond)(g._mA,g._mK,manifest[R],implicitly[SourceContext])
+      //       val count = groupByReduce(origS, keySelector, (e:Exp[a]) => unit(1), (a:Exp[Int],b:Exp[Int])=>forge_int_plus(a,b), cond)(g._mA,g._mK,manifest[Int],implicitly[SourceContext])
+      //       bulkDivide(hr, count, averageFunc)(manifest[R],implicitly[SourceContext])
+      //     case None =>
+      //       Console.err.println("WARNING: unable to fuse GroupBy-Select")
+      //       return super.table_select(self, resultSelector)
+      //   }
+      //   case _ => super.table_select(self, resultSelector)
+      // }
 
-        val isGroupBy = self match {
-          case Def(g@Table_GroupBy(origS: Exp[Table[a]], keySelector)) => true
-          case Def(g@Table_GroupByWhere(origS: Exp[Table[a]], keySelector, cond)) => true
-          case _ => false
-        }
-        if (isGroupBy) {
-          val rs = resultSelector(fresh[A])
-          val mfr = tpe1(rs)
-          val sel2func = sel2(rs) _
 
-          table_selectA(self, (x:Rep[A]) => sel1(resultSelector(x)))(manifest[A], mtype(mfr), __pos)
-               .Select(sel2func)
-        } else {
-          table_selectA(self,resultSelector)
-        }
-      }
-      // ### end groupBy fusion code ###
 
-      override def structName[T](m: Manifest[T]): String = m match {
-        case rm: RefinedManifest[_] =>
-          // order matters here!!
-          "Anon" + math.abs(rm.fields.map(f => f._1.## + f._2.toString.##).##)
-        case _ => super.structName(m)
-      }
+      // override def table_select[A:Manifest,R:Manifest](self: Rep[Table[A]], resultSelector: (Rep[A]) => Rep[R])(implicit __pos: SourceContext): Exp[Table[R]] = {
+      //   def sel1(a: Rep[R]): Rep[R] = (a match {
+      //     // right now only a/b is supported. TODO: add a+b etc
+      //     case Def(Primitive_Forge_double_divide(a,b)) =>
+      //       val a1 = a/*rewriteMap(a)(e)*/.asInstanceOf[Exp[Double]] // should we recurse here?
+      //       val b1 = b/*rewriteMap(b)(e)*/.asInstanceOf[Exp[Double]]
+      //       pack(a1,b1)
+      //     case Def(Primitive_Forge_double_times(Const(c),b)) => b // TODO: more general case
+      //     case Def(Ordering_Gt(a,b@Const(c))) => a
+      //     case Def(Ordering_Gt(a,b)) =>
+      //       val a1 = a/*rewriteMap(a)(e)*/.asInstanceOf[Exp[Double]] // should we recurse here?
+      //       val b1 = b/*rewriteMap(b)(e)*/.asInstanceOf[Exp[Double]]
+      //       pack(a1,b1)
+      //     case Def(Struct(tag: StructTag[R], elems)) =>
+      //       struct[R](tag, elems map { case (key, value) => (key, sel1(value.asInstanceOf[Rep[R]])) })
+      //     case _ => a
+      //   }).asInstanceOf[Rep[R]]
 
-      import java.io.{PrintWriter,StringWriter}
-      import scala.virtualization.lms.internal.{GenericFatCodegen}
+      //   def sel2(a: Rep[R])(v: Rep[R]): Rep[R] = (a match {
+      //     case Def(Primitive_Forge_double_divide(a,b)) =>
+      //       val v1 = v.asInstanceOf[Rep[Tup2[Double,Double]]]
+      //       val a1 = tup2__1(v1)/*sel2(a)(v._1)*/.asInstanceOf[Exp[Double]] // should we recurse here?
+      //       val b1 = tup2__2(v1)/*sel2(b)(v._2)*/.asInstanceOf[Exp[Double]]
+      //       primitive_forge_double_divide(a1,b1)
+      //     case Def(Primitive_Forge_double_times(Const(c:Double),b)) => // TODO: handle more general case
+      //       primitive_forge_double_times(Const(c),v.asInstanceOf[Rep[Double]])
+      //     case Def(d@Ordering_Gt(a,b@Const(c))) => ordering_gt(v,b)(d._ordA,d._mA,__pos)
+      //     case Def(d@Ordering_Gt(a,b)) =>
+      //       val v1 = v.asInstanceOf[Rep[Tup2[Double,Double]]]
+      //       val a1 = tup2__1(v1)/*sel2(a)(v._1)*/.asInstanceOf[Exp[Double]] // should we recurse here?
+      //       val b1 = tup2__2(v1)/*sel2(b)(v._2)*/.asInstanceOf[Exp[Double]]
+      //       assert(d._mA == manifest[Double], "FIXME: only supporting Ordering[Double]")
+      //       ordering_gt(a1,b1)(d._ordA.asInstanceOf[Ordering[Double]],manifest[Double],__pos)
+      //     case Def(Struct(tag: StructTag[R], elems)) =>
+      //       struct[R](tag, elems map { case (key, value) =>
+      //         (key, sel2(value.asInstanceOf[Rep[R]])(field[R](v,key)(mtype(value.tp),__pos))) })
+      //     case _ => v
+      //   }).asInstanceOf[Rep[R]]
 
-      // prettify & indent generated code files output
-      override def emitRegisteredSource(gen: GenericFatCodegen{val IR: DeliteQuery.this.type}, stream: PrintWriter): List[(Sym[Any], Any)] = {
-        def printIndented(str: String)(out: PrintWriter): Unit = {
-          val lines = str.split("[\n\r]")
-          var indent: Int = 0
-          for (l0 <- lines) {
-            val l = l0.trim
-            if (l.length > 0) {
-              var open: Int = 0
-              var close: Int = 0
-              var initClose: Int = 0
-              var nonWsChar: Boolean = false
-              l foreach {
-                case '{' => {
-                  open += 1
-                  if (!nonWsChar) {
-                    nonWsChar = true
-                    initClose = close
-                  }
-                }
-                case '}' => close += 1
-                case x => if (!nonWsChar && !x.isWhitespace) {
-                  nonWsChar = true
-                  initClose = close
-                }
-              }
-              if (!nonWsChar) initClose = close
-              out.println("  " * (indent - initClose) + l)
-              indent += (open - close)
-            }
-          }
-          assert (indent==0, "indentation sanity check")
-        }
-        val s = new StringWriter
-        val p = new PrintWriter(s)
-        val res = super.emitRegisteredSource(gen, p)
-        p.close()
-        val content = s.toString
-        printIndented(content)(stream)
-        stream.flush()
-        res
-      }
+      //   def tpe1(a: Rep[R]): Manifest[R] = (a match {
+      //     case Def(Primitive_Forge_double_divide(a,b)) => manifest[Tup2[Double,Double]]
+      //     case Def(Primitive_Forge_double_times(Const(c),b)) => b.tp
+      //     case Def(Ordering_Gt(a,b@Const(c))) => a.tp
+      //     case Def(d@Ordering_Gt(a,b)) =>
+      //       assert(d._mA == manifest[Double], "FIXME: only supporting Ordering[Double]")
+      //       manifest[Tup2[Double,Double]]
+      //     case Def(Struct(tag: StructTag[R], elems)) =>
+      //       val em = elems map { case (key, value) => (key, tpe1(value.asInstanceOf[Rep[R]])) }
+      //       ManifestFactory.refinedType[Record](manifest[Record], em.map(_._1).toList, em.map(_._2).toList)
+      //     case _ => a.tp
+      //   }).asInstanceOf[Manifest[R]]
+
+      //   val isGroupBy = self match {
+      //     case Def(g@QueryableGroupBy(origS: Exp[Table[a]], keySelector)) => true
+      //     case Def(g@QueryableGroupByWhere(origS: Exp[Table[a]], keySelector, cond)) => true
+      //     case _ => false
+      //   }
+      //   if (isGroupBy) {
+      //     val rs = resultSelector(fresh[A])
+      //     val mfr = tpe1(rs)
+      //     val sel2func = sel2(rs) _
+
+      //     table_selectA(self, (x:Rep[A]) => sel1(resultSelector(x)))(manifest[A], mtype(mfr), __pos)
+      //          .Select(sel2func)
+      //   } else {
+      //     table_selectA(self,resultSelector)
+      //   }
+      // }
+      // // ### end groupBy fusion code ###
+
+      // override def structName[T](m: Manifest[T]): String = m match {
+      //   case rm: RefinedManifest[_] =>
+      //     // order matters here!!
+      //     "Anon" + math.abs(rm.fields.map(f => f._1.## + f._2.toString.##).##)
+      //   case _ => super.structName(m)
+      // }
+
+      // import java.io.{PrintWriter,StringWriter}
+      // import scala.virtualization.lms.internal.{GenericFatCodegen}
+
+      // // prettify & indent generated code files output
+      // override def emitRegisteredSource(gen: GenericFatCodegen{val IR: DeliteQuery.this.type}, stream: PrintWriter): List[(Sym[Any], Any)] = {
+      //   def printIndented(str: String)(out: PrintWriter): Unit = {
+      //     val lines = str.split("[\n\r]")
+      //     var indent: Int = 0
+      //     for (l0 <- lines) {
+      //       val l = l0.trim
+      //       if (l.length > 0) {
+      //         var open: Int = 0
+      //         var close: Int = 0
+      //         var initClose: Int = 0
+      //         var nonWsChar: Boolean = false
+      //         l foreach {
+      //           case '{' => {
+      //             open += 1
+      //             if (!nonWsChar) {
+      //               nonWsChar = true
+      //               initClose = close
+      //             }
+      //           }
+      //           case '}' => close += 1
+      //           case x => if (!nonWsChar && !x.isWhitespace) {
+      //             nonWsChar = true
+      //             initClose = close
+      //           }
+      //         }
+      //         if (!nonWsChar) initClose = close
+      //         out.println("  " * (indent - initClose) + l)
+      //         indent += (open - close)
+      //       }
+      //     }
+      //     assert (indent==0, "indentation sanity check")
+      //   }
+      //   val s = new StringWriter
+      //   val p = new PrintWriter(s)
+      //   val res = super.emitRegisteredSource(gen, p)
+      //   p.close()
+      //   val content = s.toString
+      //   printIndented(content)(stream)
+      //   stream.flush()
+      //   res
+      // }
 
 
       def extractMF[T](x: Rep[Table[T]]): Manifest[T] = {
@@ -363,7 +394,8 @@ object Run {
         val c = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
         c.setTime(new java.util.Date(0)); // set origin 1970-01-01.
         c.add(Calendar.DAY_OF_YEAR, days); // Adding the number of days
-        Date(primitive_forge_int_plus(primitive_forge_int_shift_left(c.get(Calendar.YEAR), unit(9)), primitive_forge_int_plus(primitive_forge_int_shift_left(c.get(Calendar.MONTH) + 1, unit(5)), c.get(Calendar.DATE))))
+        System.out.println(s"${c.get(Calendar.MONTH) + 1}-${c.get(Calendar.DATE)}-${c.get(Calendar.YEAR)}")
+        Date(s"${c.get(Calendar.YEAR)}-${c.get(Calendar.MONTH) + 1}-${c.get(Calendar.DATE)}")
       }
 
       def appendMan(v1 : RefinedManifest[Record], v2 : RefinedManifest[Record]) = {
@@ -380,7 +412,7 @@ object Run {
       val longnull   = unit[Long](0x7FFFFFFF)
       val floatnull  = unit[Float](1e20f)
       val doublenull = unit[Double](1e20)
-      val datenull   = Date(0)
+      val datenull   = Date("0-0-0")
       val strnull    = unit[String]("")
 
       def nullrec(v1 : RefinedManifest[Record]): Rep[Record] = {
@@ -495,7 +527,7 @@ object Run {
           val tmp = conv_date(value.asInstanceOf[Int])
           tmp.asInstanceOf[Rep[T]]
         case Literal(value, StringType) =>
-          unit[String](String.valueOf(value)).asInstanceOf[Rep[T]]
+          unit[String](value.toString).asInstanceOf[Rep[T]]
         case Literal(value, _) =>
           unit[T](value.asInstanceOf[T])
         case And(left, right) =>
@@ -607,6 +639,7 @@ object Run {
           }
           res.asInstanceOf[Rep[T]]
         case CaseWhen(branches, defval) =>
+          System.out.println(branches)
           val default = defval match {
             case None        => nullvalue(branches.head._2.dataType).asInstanceOf[Rep[T]]
             case Some(value) => compileExpr[T](value, input)(rec)
@@ -618,6 +651,7 @@ object Run {
                                             rhs
           }
         case CaseWhenCodegen(branches, defval) =>
+          System.out.println(branches)
           val default = defval match {
             case None        => nullvalue(branches.head._2.dataType).asInstanceOf[Rep[T]]
             case Some(value) => compileExpr[T](value, input)(rec)
@@ -648,7 +682,7 @@ object Run {
           val value = compileExpr[String](left, input)(rec)
 
           def res(l: List[String], idx: Rep[Int]): Rep[Boolean] = l match {
-            case h::q => val idxx = fstring_indexof(value, unit[String](h), idx)
+            case h::q => val idxx = value indexOf(unit[String](h), idx)
                          if (idxx == minusone)
                             unit[Boolean](false)
                          else
@@ -659,10 +693,9 @@ object Run {
           res(token, zero).asInstanceOf[Rep[T]]
         case Substring(value, idx1, idx2) =>
           val tmp = compileExpr[Int](idx1, input)(rec) - 1
-          fstring_substring(compileExpr[String](value, input)(rec), tmp, tmp + compileExpr[Int](idx2, input)(rec))(implicitly[SourceContext], new Overload2).asInstanceOf[Rep[T]]
-
+          (compileExpr[String](value, input)(rec) substring (tmp, tmp + compileExpr[Int](idx2, input)(rec))).asInstanceOf[Rep[T]]
         case Year(exp) =>
-          primitive_forge_int_shift_right_unsigned(date_value(compileExpr[Date](exp, input)(rec)), unit[Int](9)).asInstanceOf[Rep[T]]
+          compileExpr[Date](exp, input)(rec).year.asInstanceOf[Rep[T]]
         case In (value, list) =>
           val default = unit[Boolean](false).asInstanceOf[Rep[Boolean]]
           // TODO improve code?
@@ -687,7 +720,7 @@ object Run {
         case ScalarSubquery(query, children, id) =>
           val res = compile(query, null)
           val mf = extractMF(res)
-          field[T](table_first(res)(mf, implicitly[SourceContext]), mf.asInstanceOf[RefinedManifest[Record]].fields.head._1)
+          field[T](res(0), mf.asInstanceOf[RefinedManifest[Record]].fields.head._1)
         case _ =>
           throw new RuntimeException("compileExpr, TODO: " + d.getClass.getName)
       }
@@ -716,6 +749,8 @@ object Run {
       case class CartesianJoin() extends CondVal
       case class Skip() extends CondVal
 
+      def m_Tup2[A:Manifest,B:Manifest] = manifest[Rep[(A,B)]]
+
       def compileCond(cond: Option[Expression], mfl: RefinedManifest[Record], mfr: RefinedManifest[Record], input: Map[LogicalRelation,Rep[Table[Record]]], forcePred: Boolean = false): CondVal = cond match {
         case Some(EqualTo(le, re)) =>
           val mfk = getType(cond).asInstanceOf[Manifest[Any]]
@@ -739,8 +774,8 @@ object Run {
             case (EquiJoin(llkey, rlkey, lmfk), EquiJoin(lrkey, rrkey, rmfk)) =>
               val pos = implicitly[SourceContext]
 
-              val lekey = (p: Rep[Record]) => { tup2_pack((llkey(p), lrkey(p)))(lmfk, rmfk, pos, null) }
-              val rekey = (p: Rep[Record]) => { tup2_pack((rlkey(p), rrkey(p)))(lmfk, rmfk, pos, null) }
+              val lekey = (p: Rep[Record]) => { make_tuple2((llkey(p), lrkey(p)))(lmfk, rmfk, pos) }
+              val rekey = (p: Rep[Record]) => { make_tuple2((rlkey(p), rrkey(p)))(lmfk, rmfk, pos) }
               val mfk = m_Tup2(lmfk, rmfk).asInstanceOf[Manifest[Any]]
               EquiJoin(lekey, rekey, mfk)
             case (EquiJoin(llkey, lrkey, lmfk), PredicateJoin(pred)) =>
@@ -754,8 +789,8 @@ object Run {
             case (MixedJoin(llkey, rlkey, lmfk, pred1), EquiJoin(lrkey, rrkey, rmfk)) =>
               val pos = implicitly[SourceContext]
 
-              val lekey = (p: Rep[Record]) => { tup2_pack((llkey(p), lrkey(p)))(lmfk, rmfk, pos, null) }
-              val rekey = (p: Rep[Record]) => { tup2_pack((rlkey(p), rrkey(p)))(lmfk, rmfk, pos, null) }
+              val lekey = (p: Rep[Record]) => { make_tuple2((llkey(p), lrkey(p)))(lmfk, rmfk, pos) }
+              val rekey = (p: Rep[Record]) => { make_tuple2((rlkey(p), rrkey(p)))(lmfk, rmfk, pos) }
               val mfk = m_Tup2(lmfk, rmfk).asInstanceOf[Manifest[Any]]
 
               MixedJoin(lekey, rekey, mfk, pred1)
@@ -851,14 +886,14 @@ object Run {
 
       def leftouterjoin[A:Manifest,B:Manifest,K:Manifest,R:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K],result: (Rep[A],Rep[B]) => Rep[R], nullval: Rep[B])(implicit __pos: SourceContext): Rep[Table[R]] = {
         val pos = implicitly[SourceContext]
-        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
+        val grouped = DeliteArrayBuffer(t2.toArray, t2.size).immutable.groupBy(k2)
         self.SelectMany(
           e1 => {
-            if (fhashmap_contains(grouped, k1(e1))) {
-              val buf = fhashmap_get(grouped, k1(e1))
-              Table(array_buffer_result(buf), array_buffer_length(buf)).Select(e2 => result(e1, e2))
+            if (grouped.contains(k1(e1))) {
+              val buf = grouped(k1(e1))
+              Table(buf.result).Select(e2 => result(e1, e2))
             } else {
-              Table(array_fromseq(Seq(result(e1, nullval))), unit[Int](1))
+              Table(result(e1, nullval))
             }
           }
         )
@@ -866,44 +901,41 @@ object Run {
 
       def leftouterjoin_pred[A:Manifest,B:Manifest,K:Manifest,R:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K],result: (Rep[A],Rep[B]) => Rep[R], pred: (Rep[A], Rep[B]) => Rep[Boolean], nullval: Rep[B])(implicit __pos: SourceContext): Rep[Table[R]] = {
         val pos = implicitly[SourceContext]
-        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
+        val grouped = DeliteArrayBuffer(t2.toArray, t2.size).immutable.groupBy(k2)
         self.SelectMany(
           e1 => {
-            if (fhashmap_contains(grouped, k1(e1))) {
-              val buf = fhashmap_get(grouped, k1(e1))
-              val res = Table(array_buffer_result(buf), array_buffer_length(buf)).Where(e2 => pred(e1, e2))
-              if (table_size(res) > 0)
+            if (grouped.contains(k1(e1))) {
+              val buf = grouped(k1(e1))
+              val res = Table(buf.result).Where(e2 => pred(e1, e2))
+              if (res.size > 0)
                 res.Select(e2 => result(e1, e2))
               else
-                Table(array_fromseq(Seq(result(e1, nullval))), unit[Int](1))
+                Table(result(e1, nullval))
             } else {
-              Table(array_fromseq(Seq(result(e1, nullval))), unit[Int](1))
+              Table(result(e1, nullval))
             }
           }
         )
       }
 
       def leftsemijoin[A:Manifest,B:Manifest,K:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K])(implicit __pos: SourceContext): Rep[Table[A]] = {
-        val pos = implicitly[SourceContext]
-        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
-        self.Where(e1 => fhashmap_contains(grouped, k1(e1)))
+        val grouped = DeliteArrayBuffer(t2.toArray, t2.size).immutable.groupBy(k2)
+        self.Where(e1 => grouped.contains(k1(e1)))
       }
 
       def leftantijoin[A:Manifest,B:Manifest,K:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K])(implicit __pos: SourceContext): Rep[Table[A]] = {
-        val pos = implicitly[SourceContext]
-        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
-        self.Where(e1 => !fhashmap_contains(grouped, k1(e1)))
+        val grouped = DeliteArrayBuffer(t2.toArray, t2.size).immutable.groupBy(k2)
+        self.Where(e1 => !grouped.contains(k1(e1)))
       }
 
       def leftsemijoin_mixed[A:Manifest,B:Manifest,K:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K], pred: (Rep[A], Rep[B]) => Rep[Boolean])(implicit __pos: SourceContext): Rep[Table[A]] = {
-        val pos = implicitly[SourceContext]
-        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
+        val grouped = DeliteArrayBuffer(t2.toArray, t2.size).immutable.groupBy(k2)
         self.Where(
           e1 => {
-            if (fhashmap_contains(grouped, k1(e1))) {
-              val buf = fhashmap_get(grouped, k1(e1))
+            if (grouped.contains(k1(e1))) {
+              val buf = grouped(k1(e1))
               // TODO shortcut
-              val res = Table(array_buffer_result(buf), array_buffer_length(buf)).Count((e2: Rep[B]) => pred(e1, e2))
+              val res = Table(buf.result).Count((e2: Rep[B]) => pred(e1, e2))
               res > 0
             } else
               unit[Boolean](false)
@@ -912,14 +944,13 @@ object Run {
       }
 
       def leftantijoin_mixed[A:Manifest,B:Manifest,K:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K], pred: (Rep[A], Rep[B]) => Rep[Boolean])(implicit __pos: SourceContext): Rep[Table[A]] = {
-        val pos = implicitly[SourceContext]
-        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
+        val grouped = DeliteArrayBuffer(t2.toArray, t2.size).immutable.groupBy(k2)
         self.Where(
           e1 => {
-            if (fhashmap_contains(grouped, k1(e1))) {
-              val buf = fhashmap_get(grouped, k1(e1))
+            if (grouped.contains(k1(e1))) {
+              val buf = grouped(k1(e1))
               // TODO shortcut
-              val res = Table(array_buffer_result(buf), array_buffer_length(buf)).Count((e2: Rep[B]) => pred(e1, e2))
+              val res = Table(buf.result).Count((e2: Rep[B]) => pred(e1, e2))
               res == 0
             } else
               unit[Boolean](true)
@@ -928,7 +959,6 @@ object Run {
       }
 
       def leftsemijoin_pred[A:Manifest,B:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]], pred: (Rep[A], Rep[B]) => Rep[Boolean])(implicit __pos: SourceContext): Rep[Table[A]] = {
-        val pos = implicitly[SourceContext]
         self.Where(
           e1 => {
               // TODO shortcut
@@ -939,7 +969,6 @@ object Run {
       }
 
       def leftantijoin_pred[A:Manifest,B:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]], pred: (Rep[A], Rep[B]) => Rep[Boolean])(implicit __pos: SourceContext): Rep[Table[A]] = {
-        val pos = implicitly[SourceContext]
         self.Where(
           e1 => {
               // TODO shortcut
@@ -949,24 +978,20 @@ object Run {
         )
       }
 
-      def join2_imple[A:Manifest,B:Manifest,K:Manifest,R:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K],result: (Rep[A],Rep[B]) => Rep[R])(implicit __pos: SourceContext): Rep[Table[R]] = {
-        val grouped = array_buffer_groupBy(array_buffer_new_imm(table_raw_data(t2), array_length(table_raw_data(t2))), k2)
-        val empty = Table(array_empty_imm[R](unit(0)))
-        val sol = self.SelectMany(e1 => {
-          if (fhashmap_contains(grouped, k1(e1))) {
-            val buf = fhashmap_get(grouped, k1(e1))
-            Table(array_buffer_unsafe_result(buf), array_buffer_length(buf)).Select(e2 => result(e1,e2))
-          }
-          else empty
-        })
-        sol
-      }
+      // def join2_imple[A:Manifest,B:Manifest,K:Manifest,R:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],k1: (Rep[A]) => Rep[K],k2: (Rep[B]) => Rep[K],result: (Rep[A],Rep[B]) => Rep[R])(implicit __pos: SourceContext): Rep[Table[R]] = {
+      //   val grouped = DeliteArrayBuffer(t2.toArray, t2.size).immutable.groupBy(k2)
+      //   self.SelectMany(e1 => {
+      //     if (grouped.contains(k1(e1))) {
+      //       val buf = grouped(k1(e1))
+      //       Table(buf.result).Select(e2 => result(e1,e2))
+      //     }
+      //     else
+      //       Table(DeliteArray.imm[R](unit(0)))
+      //   })
+      // }
 
       def cartesian_join[A:Manifest,B:Manifest,R:Manifest](self: Rep[Table[A]],t2: Rep[Table[B]],result: (Rep[A],Rep[B]) => Rep[R])(implicit __pos: SourceContext): Rep[Table[R]] = {
-        val sself = table_size(self)
-        val st2 = table_size(t2)
-        val res = self.SelectMany(e1 => t2.Select(e2 => result(e1, e2)))
-        res
+        self.SelectMany(e1 => t2.Select(e2 => result(e1, e2)))
       }
 
       def infix_+(x: Int, y: Option[Int]): Option[Int] = y match {
@@ -985,21 +1010,21 @@ object Run {
         case Nil                                          => Some(0)
       }
 
-      def keySelection(groupingExpr: Seq[Expression])(implicit input: Map[LogicalRelation,Rep[Table[Record]]]): (Manifest[Any], Rep[Record] => Rep[Any]) = groupingExpr match {
-        case Seq() => throw new RuntimeException("Nothing to group by")
-        case Seq(exp) =>
-          val mfk = convertType(exp).asInstanceOf[Manifest[Any]]
-          (mfk, compileExpr[Any](exp, input)(_)(mfk))
+      def keySelection(groupingExpr: List[Expression])(implicit input: Map[LogicalRelation,Rep[Table[Record]]]): (Manifest[Any], Rep[Record] => Rep[Any]) = groupingExpr match {
+        case Nil => throw new RuntimeException("Nothing to group by")
+        case t::Nil =>
+          val mfk = convertType(t).asInstanceOf[Manifest[Any]]
+          (mfk, compileExpr[Any](t, input)(_)(mfk))
         case _ =>
           val mfk = ManifestFactory.refinedType[Record](
                 manifest[Record],
-                groupingExpr.map { p => getName(p) }.toList,
+                groupingExpr.map { p => getName(p) },
                 groupingExpr.map { (p:Expression) =>
-                    convertType(p).asInstanceOf[Manifest[_]] }.toList).asInstanceOf[Manifest[Any]]
+                    convertType(p).asInstanceOf[Manifest[_]] }).asInstanceOf[Manifest[Any]]
 
 
           val size = recordSize(mfk.asInstanceOf[RefinedManifest[Record]].fields)
-          if (true /* size == None || size.get > 8 */)
+          if (size == None || size.get > 8)
             (mfk, (rec: Rep[Record]) => record_new(
                groupingExpr.map {
                  (p:Expression) => (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(rec)(convertType(p).asInstanceOf[Manifest[Any]])})
@@ -1008,8 +1033,8 @@ object Run {
           else
             (manifest[Long].asInstanceOf[Manifest[Any]], (rec: Rep[Record]) => (groupingExpr :\ unit[Long](0L).asInstanceOf[Rep[Long]]) {
               case (exp: Expression, agg: Rep[Long]) => convertType(exp) match {
-                case man if (man == manifest[Char]) => agg // 256L * agg + compileExpr[Char](exp,input)(rec)(manifest[Char]).asInstanceOf[Rep[Long]]
-                case man if (man == manifest[Int])  => agg // 256L * 256L * 256L * 256L * agg + compileExpr[Int](exp,input)(rec)(manifest[Int]).asInstanceOf[Rep[Long]]
+                case man if (man == manifest[Char]) => (agg << 8) + compileExpr[Char](exp,input)(rec)(manifest[Char]).asInstanceOf[Rep[Long]]
+                case man if (man == manifest[Int])  =>(agg << 32) + compileExpr[Int](exp,input)(rec)(manifest[Int]).asInstanceOf[Rep[Long]]
               }
             })
       }
@@ -1019,101 +1044,21 @@ object Run {
           case Sort(sortingExpr, global, child) =>
             val res = compile(child, input)
             val mfa = extractMF(res)
-            table_orderby(
-              res,
-              sortingExpr.map {
-                (p:Expression) => p match {
-                  case SortOrder(child, order) =>
-                    child.dataType match {
-                      case FloatType =>
-                        if (order == Ascending)
-                          (x:Rep[Record], y:Rep[Record]) => {
-                            if (compileExpr[Float](child, input)(x) < compileExpr[Float](child, input)(y))
-                              unit[Int](-1)
-                            else if (compileExpr[Float](child, input)(x) > compileExpr[Float](child, input)(y))
-                              unit[Int](1)
-                            else
-                              unit[Int](0)
-                          }
-                        else
-                          (x:Rep[Record], y:Rep[Record]) => {
-                            if (compileExpr[Float](child, input)(x) < compileExpr[Float](child, input)(y))
-                              unit[Int](1)
-                            else if (compileExpr[Float](child, input)(x) > compileExpr[Float](child, input)(y))
-                              unit[Int](-1)
-                            else
-                              unit[Int](0)
-                          }
-                      case DoubleType =>
-                        if (order == Ascending)
-                          (x:Rep[Record], y:Rep[Record]) => {
-                            if (compileExpr[Double](child, input)(x) < compileExpr[Double](child, input)(y))
-                              unit[Int](-1)
-                            else if (compileExpr[Double](child, input)(x) > compileExpr[Double](child, input)(y))
-                              unit[Int](1)
-                            else
-                              unit[Int](0)
-                          }
-                        else
-                          (x:Rep[Record], y:Rep[Record]) => {
-                            if (compileExpr[Double](child, input)(x) < compileExpr[Double](child, input)(y))
-                              unit[Int](1)
-                            else if (compileExpr[Double](child, input)(x) > compileExpr[Double](child, input)(y))
-                              unit[Int](-1)
-                            else
-                              unit[Int](0)
-                          }
-                      case IntegerType =>
-                        if (order == Ascending)
-                          (x:Rep[Record], y:Rep[Record]) => {
-                            compileExpr[Int](child, input)(x) - compileExpr[Int](child, input)(y)
-                          }
-                        else
-                          (x:Rep[Record], y:Rep[Record]) => {
-                            compileExpr[Int](child, input)(y) - compileExpr[Int](child, input)(x)
-                          }
-                      case LongType =>
-                        if (order == Ascending)
-                          (x:Rep[Record], y:Rep[Record]) => {
-                            (compileExpr[Long](child, input)(x) - compileExpr[Long](child, input)(y)).toInt
-                          }
-                        else
-                          (x:Rep[Record], y:Rep[Record]) => {
-                            (compileExpr[Long](child, input)(y) - compileExpr[Long](child, input)(x)).toInt
-                          }
-                      case DateType =>
-                        if (order == Ascending)
-                          (x:Rep[Record], y:Rep[Record]) => {
-                            (date_value(compileExpr[Date](child, input)(x)) - date_value(compileExpr[Date](child, input)(y))).toInt
-                          }
-                        else
-                          (x:Rep[Record], y:Rep[Record]) => {
-                            (date_value(compileExpr[Date](child, input)(y)) - date_value(compileExpr[Date](child, input)(x))).toInt
-                          }
-                      case StringType =>
-                        if (order == Ascending)
-                          (x:Rep[Record], y:Rep[Record]) => {
-                            if (compileExpr[String](child, input)(x) < compileExpr[String](child, input)(y))
-                              unit[Int](-1)
-                            else if (compileExpr[String](child, input)(x) > compileExpr[String](child, input)(y))
-                              unit[Int](1)
-                            else
-                              unit[Int](0)
-                          }
-                        else
-                          (x:Rep[Record], y:Rep[Record]) => {
-                            if (compileExpr[String](child, input)(x) < compileExpr[String](child, input)(y))
-                              unit[Int](1)
-                            else if (compileExpr[String](child, input)(x) > compileExpr[String](child, input)(y))
-                              unit[Int](-1)
-                            else
-                              unit[Int](0)
-                          }
-                    }
-                  case _ => throw new RuntimeException("Sorting Expression " + p.getClass + " not supported")
-                }
-              }
-            )(mfa, implicitly[SourceContext])
+            val t +: q = sortingExpr
+            val init = t match {
+              case SortOrder(child, Ascending) =>
+                queryable_orderby(res, (rec:Rep[Record]) => compileExpr[Any](child, input)(rec))(mfa,orderDataType(child.dataType),convertDataType(child.dataType))
+              case SortOrder(child, _) =>
+                queryable_orderbydescending(res, (rec:Rep[Record]) => compileExpr[Any](child, input)(rec))(mfa,orderDataType(child.dataType),convertDataType(child.dataType))
+              case _ => throw new RuntimeException("Sorting Expression " + t.getClass + " not supported")
+            }
+            (init /: q) {
+              case (prec, SortOrder(child, Ascending)) =>
+                queryable_thenby(prec, (rec:Rep[Record]) => compileExpr[Any](child, input)(rec))(mfa,orderDataType(child.dataType),convertDataType(child.dataType))
+              case (prec, SortOrder(child, _)) =>
+                queryable_thenbydescending(prec, (rec:Rep[Record]) => compileExpr[Any](child,input)(rec))(mfa,orderDataType(child.dataType),convertDataType(child.dataType))
+                  case _ => throw new RuntimeException("Sorting Expression " + q.getClass + " not supported")
+            }
           case Aggregate(groupingExpr, aggregateExpr, child) =>
             val res = compile(child, input)
 
@@ -1129,41 +1074,38 @@ object Run {
                         convertType(p)}.toList )
 
             if (groupingExpr.length == 0) {
-              table_object_apply(
-                Seq(
-                  record_new[Record](
-                    aggregateExpr.map { (p:Expression) =>
-                      val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                      (getName(p), false, (x:Any) => compileExpr[Any](p, input)(res)(mfp))
-                    }
-                  )(mfo)
-                )
-              )(mfo, pos, null)
+              optiql_table_from_seq(
+                scala.collection.Seq(record_new[Record](
+                  aggregateExpr.map { (p:Expression) =>
+                    val mfp = convertType(p).asInstanceOf[Manifest[Any]]
+                    (getName(p), false, (x:Any) => compileExpr[Any](p, input)(res)(mfp))
+                  }
+                )(mfo))
+              )(mfo)
             } else {
 
 
-              val (mfk, keySelect) = keySelection(groupingExpr)(input)
+              val (mfk, keySelect) = keySelection(groupingExpr.toList)(input)
 
-              val group = table_groupby(
+              val group = queryable_groupby(
                 res,
                 keySelect
-              )(mfa, mfk, pos)
-
-
+              )(mfa, mfk)
               val mfg = extractMF(group)
-              System.out.println(mfg)
-              val tmp = table_select(
+
+              val tmp = queryable_select(
                   group,
-                  { (coup:Rep[Tup2[Any, Table[Record]]]) =>
-                    val key = tup2__1(coup)(mfk, pos)
-                    val tab = tup2__2(coup)(res.tp.asInstanceOf[Manifest[Table[Record]]],pos)
+                  { (coup:Rep[Grouping[Any,Record]]) =>
+                    val key = queryable_grouping_key(coup)(mfk,mfa)
+                    val tab = queryable_grouping_toDatatable(coup)(mfk,mfa)
+                    System.out.println(tab.tp)
                     val tmp = record_new[Record](aggregateExpr.map {
                       (p: Expression) =>
                         val mfp = convertType(p).asInstanceOf[Manifest[Any]]
                         p match {
                           case AttributeReference(_, _, _, _) =>
                             (getName(p), false, {(x:Any) => if (groupingExpr.length == 1) key else {
-                              compileExpr(p, input)(key)(mfp)
+                              compileExpr(p, input)(queryable_first(tab)(mfo))(mfp)
                               }})
                           case _ =>
                             (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(tab)(mfp)})
@@ -1171,12 +1113,13 @@ object Run {
                     })(mfo)
                     tmp
                   }
-                 )(mfg, mfo, pos)
+                 )(mfg, mfo)
               tmp
             }
 
           case Project(projectList, child) =>
             val res = compile(child, input)
+            return res
 
             // TODO handle distinc select
 
@@ -1190,7 +1133,7 @@ object Run {
                     projectList.map {p => getName(p)}.toList,
                     projectList.map { (p:NamedExpression) =>
                         convertType(p)}.toList )
-            table_select(
+            queryable_select(
               res,
               { (rec:Rep[Record]) =>
                 record_new[Record](projectList.map {
@@ -1199,7 +1142,7 @@ object Run {
                   }
                 )(mfa)
               }
-            )(mfb, mfa, implicitly[SourceContext])
+            )(mfb, mfa)
           case Filter(condition, child) =>
             val res = compile(child, input)
             filterUseless(condition) match {
@@ -1207,9 +1150,14 @@ object Run {
                 val (rcond, _) = reorderString(condition)
                 System.out.println("Filter removed (" + rcond + ")")
                 val mf = extractMF(res)
-                table_where(res, { (rec:Rep[Record]) =>
-                  compileExpr[Boolean](rcond, input)(rec)
-                })(mf, implicitly[SourceContext])
+                // if (res.size > 0) {
+                  queryable_where(res, { (rec:Rep[Record]) =>
+                    compileExpr[Boolean](rcond, input)(rec)
+                  })(mf)
+                // } else {
+                //  println("DUh....")
+                //  res
+                // }
               case None => // System.out.println("Filter removed (" + condition + ")")
                 res
             }
@@ -1220,7 +1168,7 @@ object Run {
             relation match {
               case relation: CsvRelation =>
                 if (preloadData) input(a) else {
-                  trait TYPE
+                  trait TYPE <: Record
                   implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
                   Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]]
                 }
@@ -1230,7 +1178,7 @@ object Run {
                 val optfld = relation.getClass.getDeclaredFields.filter(_.getName == "options").head
                 optfld.setAccessible(true)
                 if (preloadData) input(a) else {
-                  trait TYPE
+                  trait TYPE <: Record
                   implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
                   Table.fromFile[TYPE](locfld.get(relation).asInstanceOf[ListingFileCatalog].paths.head.toString.split(":")(1), escapeDelim((optfld.get(relation).asInstanceOf[Map[String,String]] apply "delimiter").charAt(0))).asInstanceOf[Rep[Table[Record]]]
                 }
@@ -1263,7 +1211,7 @@ object Run {
                         )(mfo)
                       }
 
-                    join2_imple(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, implicitly[SourceContext])
+                    queryable_join2(resl, lkey, resr, rkey, reskey)(mfl, mfr, mfk, mfo)
                   case LeftOuter =>
                     val mfo = appendMan(mfl_rec, mfr_rec)
                     val nullval = nullrec(mfr_rec)
@@ -1304,18 +1252,18 @@ object Run {
                         )(mfo)
                       }
                     val pos = implicitly[SourceContext]
-                    table_selectmany(
+                    queryable_selectMany(
                       resl,
                       {(l: Rep[Record]) =>
-                        table_select(
-                          table_where(
+                        queryable_select(
+                          queryable_where(
                             resr,
                             {(r: Rep[Record]) => pred(l, r)}
-                          )(mfr, pos),
+                          )(mfr),
                           {(r: Rep[Record]) => reskey(l, r)}
-                        )(mfr, mfo, pos)
+                        )(mfr, mfo)
                       }
-                    )(mfl, mfo, pos)
+                    )(mfl, mfo)
                   case LeftSemi => leftsemijoin_pred(resl, resr, pred)(mfl, mfr, implicitly[SourceContext])
                   case LeftAnti => leftantijoin_pred(resl, resr, pred)(mfl, mfr, implicitly[SourceContext])
                 }
@@ -1337,11 +1285,10 @@ object Run {
                         )(mfo)
                       }
 
-                    val pos = implicitly[SourceContext]
-                    table_where(
-                      join2_imple(resl, resr, lkey, rkey, reskey)(mfl, mfr, mfk, mfo, pos),
+                    queryable_where(
+                      queryable_join2(resl, lkey, resr, rkey, reskey)(mfl, mfr, mfk, mfo),
                       (rec:Rep[Record]) => pred(rec, rec)
-                    )(mfo, pos)
+                    )(mfo)
                   case LeftOuter =>
                     val mfo = appendMan(mfl_rec, mfr_rec)
                     val nullval = nullrec(mfr_rec)
@@ -1381,45 +1328,6 @@ object Run {
                 cartesian_join(resl, resr, reskey)(mfl, mfr, mfo, implicitly[SourceContext])
             }
             res
-          case a if a.getClass.getName == expcl =>
-            val flp = a.getClass.getDeclaredFields.filter(_.getName == "projections").head
-            flp.setAccessible(true)
-            val projections = flp.get(a).asInstanceOf[Seq[Seq[Expression]]]
-            val flo = a.getClass.getDeclaredFields.filter(_.getName == "output").head
-            flo.setAccessible(true)
-            val output = flo.get(a).asInstanceOf[Seq[Expression]]
-            val flc = a.getClass.getDeclaredFields.filter(_.getName == "child").head
-            flc.setAccessible(true)
-            val child = flc.get(a).asInstanceOf[LogicalPlan]
-            val res = compile(child, input)
-
-            val mfa = extractMF(res)
-            val mfo = ManifestFactory.refinedType[Record](
-                    manifest[Record],
-                    output.map {p => getName(p)}.toList,
-                    output.toList.map { (p:Expression) =>
-                        convertType(p)}.toList ).asInstanceOf[Manifest[Any]]
-
-            val pos = implicitly[SourceContext]
-            val tres = table_selectmany(
-              res,
-              {(rec: Rep[Record]) =>
-                table_object_apply(
-                  projections.map {
-                    case (proj: Seq[Expression]) =>
-                      record_new(
-                        proj.zip(output).map {
-                          case (p:Expression, q: Expression) => {
-                            val mfp = convertType(p).asInstanceOf[Manifest[Any]]
-                            (getName(q), false, (x:Any) => compileExpr[Any](p, input)(rec)(mfp))
-                          }
-                        }
-                      )(mfo)
-                  }.toSeq
-                )(mfo, pos, new Overload4)
-             }
-            )(mfa, mfo, pos)
-            tres.asInstanceOf[Rep[Table[Record]]]
           case _ => throw new RuntimeException("unknown query operator: " + d.getClass)
         }
         sol
@@ -1439,7 +1347,7 @@ object Run {
         case a@LogicalRelation(relation, _, _) =>
           relation match {
             case relation: CsvRelation =>
-              trait TYPE
+              trait TYPE <: Record
               implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
               Map(a -> Table.fromFile[TYPE](relation.location, escapeDelim(relation.delimiter)).asInstanceOf[Rep[Table[Record]]])
             case relation if relation.getClass.getName == "org.apache.spark.sql.execution.datasources.HadoopFsRelation" =>//HadoopFsRelation(_, location, _, _, _, _, options) =>
@@ -1447,7 +1355,7 @@ object Run {
               locfld.setAccessible(true)
               val optfld = relation.getClass.getDeclaredFields.filter(_.getName == "options").head
               optfld.setAccessible(true)
-              trait TYPE
+              trait TYPE <: Record
               implicit val mf: Manifest[TYPE] = convertAttribRefsType(a.output).asInstanceOf[Manifest[TYPE]]
               Map(a -> Table.fromFile[TYPE](locfld.get(relation).asInstanceOf[ListingFileCatalog].paths.head.toString.split(":")(1), escapeDelim((optfld.get(relation).asInstanceOf[Map[String,String]] apply "delimiter").charAt(0))).asInstanceOf[Rep[Table[Record]]])
           }
@@ -1475,20 +1383,20 @@ object Run {
         if (preloadData) {
           tic("load")
           input = preload(d)
-          toc("load", input.toSeq.map(_._2.size):_*)
+          toc(input.toList.map(_._2.size): _*)
           println("preload: Done")
-          tic("exec", input.toSeq.map(_._2.size):_*)
+          tic(input.toList.map(_._2.size): _*)
         }
 
         val res = compile(d, input)
         System.out.println("Compiled")
 
         if (preloadData) {
-          toc("exec", res)
+          toc(res)
         }
 
         val mf = extractMF(res)
-        infix_printAsTable(res, 20)(mf, implicitly[SourceContext])
+        infix_printAsTable(res, 20)(mf)
         System.out.println("Done")
       }
     }
