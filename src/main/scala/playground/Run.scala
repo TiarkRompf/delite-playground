@@ -394,7 +394,6 @@ object Run {
         val c = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
         c.setTime(new java.util.Date(0)); // set origin 1970-01-01.
         c.add(Calendar.DAY_OF_YEAR, days); // Adding the number of days
-        System.out.println(s"${c.get(Calendar.MONTH) + 1}-${c.get(Calendar.DATE)}-${c.get(Calendar.YEAR)}")
         Date(s"${c.get(Calendar.YEAR)}-${c.get(Calendar.MONTH) + 1}-${c.get(Calendar.DATE)}")
       }
 
@@ -639,7 +638,6 @@ object Run {
           }
           res.asInstanceOf[Rep[T]]
         case CaseWhen(branches, defval) =>
-          System.out.println(branches)
           val default = defval match {
             case None        => nullvalue(branches.head._2.dataType).asInstanceOf[Rep[T]]
             case Some(value) => compileExpr[T](value, input)(rec)
@@ -651,7 +649,6 @@ object Run {
                                             rhs
           }
         case CaseWhenCodegen(branches, defval) =>
-          System.out.println(branches)
           val default = defval match {
             case None        => nullvalue(branches.head._2.dataType).asInstanceOf[Rep[T]]
             case Some(value) => compileExpr[T](value, input)(rec)
@@ -749,7 +746,7 @@ object Run {
       case class CartesianJoin() extends CondVal
       case class Skip() extends CondVal
 
-      def m_Tup2[A:Manifest,B:Manifest] = manifest[Rep[(A,B)]]
+      def m_Tup2[A:Manifest,B:Manifest] = manifest[(A,B)]
 
       def compileCond(cond: Option[Expression], mfl: RefinedManifest[Record], mfr: RefinedManifest[Record], input: Map[LogicalRelation,Rep[Table[Record]]], forcePred: Boolean = false): CondVal = cond match {
         case Some(EqualTo(le, re)) =>
@@ -1098,12 +1095,11 @@ object Run {
                   { (coup:Rep[Grouping[Any,Record]]) =>
                     val key = queryable_grouping_key(coup)(mfk,mfa)
                     val tab = queryable_grouping_toDatatable(coup)(mfk,mfa)
-                    System.out.println(tab.tp)
                     val tmp = record_new[Record](aggregateExpr.map {
                       (p: Expression) =>
                         val mfp = convertType(p).asInstanceOf[Manifest[Any]]
                         p match {
-                          case AttributeReference(_, _, _, _) =>
+                          case AttributeReference(_, _, _, _) | Alias(AttributeReference(_, _, _, _), _)=>
                             (getName(p), false, {(x:Any) => if (groupingExpr.length == 1) key else {
                               compileExpr(p, input)(queryable_first(tab)(mfo))(mfp)
                               }})
@@ -1148,7 +1144,6 @@ object Run {
             filterUseless(condition) match {
               case Some (condition) =>
                 val (rcond, _) = reorderString(condition)
-                System.out.println("Filter removed (" + rcond + ")")
                 val mf = extractMF(res)
                 // if (res.size > 0) {
                   queryable_where(res, { (rec:Rep[Record]) =>
@@ -1193,7 +1188,12 @@ object Run {
             val mfl_rec = mfl.asInstanceOf[RefinedManifest[Record]]
             val mfr_rec = mfr.asInstanceOf[RefinedManifest[Record]]
 
-            val res = compileCond(cond, mfl_rec, mfr_rec, input) match {
+            val rcond = cond match {
+              case Some(cond) => Some(reorderString(cond)._1)
+              case _ => cond
+            }
+
+            val res = compileCond(rcond, mfl_rec, mfr_rec, input) match {
               case EquiJoin(lkey, rkey, mfk) =>
                 tpe match {
                   case Inner =>
