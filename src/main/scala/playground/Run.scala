@@ -153,6 +153,7 @@ object Run {
           case Def(Field(Def(Field(s,"_1")),index)) => (a:Exp[A]) => field(keySelector(a),index)(value.tp,ctx)
           case Def(Field(s,"_1")) => keySelector
           case Def(Field(Def(Field(s,"_2")),index)) => (a:Exp[A]) => field(keySelector(a),index)(value.tp,ctx) // we know that it must be part of the selector ....
+          case Def(FieldApply(s,index)) => (a:Exp[A]) => field(a,index)(value.tp,ctx)
           case Def(Table_Sum(s, sumSelector)) => sumSelector
           case Def(Table_Average(s, avgSelector)) => avgSelector
           case Def(Table1_Count(s, f)) => (a:Exp[A]) => if (f(a)) { unit(1) } else { unit(0) }
@@ -179,6 +180,7 @@ object Run {
           case Def(d@Internal_pack2(u,v)) => (a:Exp[Tup2[N,N]],b:Exp[Tup2[N,N]]) =>
             pack(rewriteReduce(u)(tup2__1(a)(mtype(u.tp),ctx),tup2__1(b)(mtype(u.tp),ctx)),
                  rewriteReduce(v)(tup2__2(a)(mtype(v.tp),ctx),tup2__2(b)(mtype(v.tp),ctx)))(mtype(u.tp),mtype(v.tp),ctx,implicitly)
+          case Def(FieldApply(s,index)) => (a:Exp[N],b:Exp[N]) => a
           case Def(a) => Console.err.println("found unknown reduce: " + a.toString); failed = true; null
           case _ => Console.err.println("found unknown reduce: " + value.toString); failed = true; null
         }).asInstanceOf[(Exp[N],Exp[N])=>Exp[N]]
@@ -999,7 +1001,7 @@ object Run {
 
 
           val size = recordSize(mfk.asInstanceOf[RefinedManifest[Record]].fields)
-          if (true /* size == None || size.get > 8 */)
+          if (size == None || size.get > 8)
             (mfk, (rec: Rep[Record]) => record_new(
                groupingExpr.map {
                  (p:Expression) => (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(rec)(convertType(p).asInstanceOf[Manifest[Any]])})
@@ -1008,8 +1010,8 @@ object Run {
           else
             (manifest[Long].asInstanceOf[Manifest[Any]], (rec: Rep[Record]) => (groupingExpr :\ unit[Long](0L).asInstanceOf[Rep[Long]]) {
               case (exp: Expression, agg: Rep[Long]) => convertType(exp) match {
-                case man if (man == manifest[Char]) => agg // 256L * agg + compileExpr[Char](exp,input)(rec)(manifest[Char]).asInstanceOf[Rep[Long]]
-                case man if (man == manifest[Int])  => agg // 256L * 256L * 256L * 256L * agg + compileExpr[Int](exp,input)(rec)(manifest[Int]).asInstanceOf[Rep[Long]]
+                case man if (man == manifest[Char]) => (agg << 8) + compileExpr[Char](exp,input)(rec)(manifest[Char]).asInstanceOf[Rep[Long]]
+                case man if (man == manifest[Int])  => (agg << 32) + compileExpr[Int](exp,input)(rec)(manifest[Int]).asInstanceOf[Rep[Long]]
               }
             })
       }
@@ -1151,7 +1153,6 @@ object Run {
 
 
               val mfg = extractMF(group)
-              System.out.println(mfg)
               val tmp = table_select(
                   group,
                   { (coup:Rep[Tup2[Any, Table[Record]]]) =>
@@ -1161,9 +1162,9 @@ object Run {
                       (p: Expression) =>
                         val mfp = convertType(p).asInstanceOf[Manifest[Any]]
                         p match {
-                          case AttributeReference(_, _, _, _) =>
-                            (getName(p), false, {(x:Any) => if (groupingExpr.length == 1) key else {
-                              compileExpr(p, input)(key)(mfp)
+                          case AttributeReference(_, _, _, _) | Alias(AttributeReference(_,_,_,_), _) =>
+                            (getName(p), false, {(x:Any) => if (groupingExpr.length == 1) { key } else {
+                              compileExpr(p, input)(table_first(tab)(mfo, pos))(mfp)
                               }})
                           case _ =>
                             (getName(p), false, {(x:Any) => compileExpr[Any](p, input)(tab)(mfp)})
