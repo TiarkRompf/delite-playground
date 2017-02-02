@@ -24,9 +24,9 @@ libraryDependencies += "stanford-ppl" %% "framework" % "0.1-SNAPSHOT"
 
 libraryDependencies += "stanford-ppl" %% "runtime" % "0.1-SNAPSHOT"
 
-//libraryDependencies += "stanford-ppl" %% "optiml" % "0.1-SNAPSHOT"
+libraryDependencies += "stanford-ppl" %% "optimql" % "0.1-SNAPSHOT"
 
-libraryDependencies += "stanford-ppl" %% "optiql" % "0.1-SNAPSHOT"
+// libraryDependencies += "stanford-ppl" %% "optiql" % "0.1-SNAPSHOT"
 
 libraryDependencies += "org.apache.spark" %% "spark-core" % "2.0.0"
 

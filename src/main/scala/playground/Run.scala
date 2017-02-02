@@ -15,9 +15,9 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.execution.datasources.ListingFileCatalog
 
-import optiql.compiler._
-import optiql.library._
-import optiql.shared._
+import optimql.compiler._
+import optimql.library._
+import optimql.shared._
 import scala.reflect.{Manifest,SourceContext,ManifestFactory,RefinedManifest}
 import scala.virtualization.lms.common.{Record, TupleOps}
 import scala.math.Ordering
@@ -143,7 +143,15 @@ object Run {
   }
 
   def runDelite(d : LogicalPlan, preloadData: Boolean, debugf: Boolean = false) = {
-    object DeliteQuery extends OptiQLApplicationCompiler with DeliteTestRunner {
+    object DeliteQuery extends OptiMQLApplicationCompiler with DeliteTestRunner {
+
+      //TODO: merge this into standard SoA transform and check safety
+      // override def transformLoop(stm: Stm): Option[Exp[Any]] = stm match {
+      //   case TP(sym, r:DeliteOpReduceLike[_]) if r.mutable => None // mutable reduces don't work yet
+      //   case TP(sym, Loop(size, v, body: DeliteReduceElem[a])) => soaReduce[a](size,v,body)(body.mA)
+      //   case TP(sym, Loop(size, v, body: DeliteHashReduceElem[k,v,i,cv])) => soaHashReduce[k,v,i,cv](size,v,body)(body.mK,body.mV,body.mI,body.mCV)
+      //   case _ => super.transformLoop(stm)
+      // }
 
       // ### begin modified code for groupBy fusion from hyperdsl ###
       private def hashReduce[A:Manifest,K:Manifest,T:Manifest,R:Manifest](resultSelector: Exp[T] => Exp[R], keySelector: Exp[A] => Exp[K]): Option[(Exp[A]=>Exp[R], (Exp[R],Exp[R])=>Exp[R], (Exp[R],Exp[Int])=>Exp[R])] = {
@@ -171,10 +179,11 @@ object Run {
           case Def(Field(Def(Field(s,"_1")),index)) => (a:Exp[N],b:Exp[N]) => a
           case Def(Field(s,"_1")) => (a:Exp[N],b:Exp[N]) => a
           case Def(Field(Def(Field(s,"_2")),index)) => (a:Exp[N],b:Exp[N]) => a
-          case Def(d@Table_Sum(_,_)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(d._numR),mtype(d._mR),ctx)
-          case Def(d@Table_Average(_,_)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(d._numR),mtype(d._mR),ctx)
-          case Def(d@Table2_Count(s)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(implicitly[Numeric[Int]]),mtype(manifest[Int]),ctx)
-          case Def(d@Table1_Count(s, f)) => (a:Exp[N],b:Exp[N]) => numeric_pl(a,b)(ntype(implicitly[Numeric[Int]]),mtype(manifest[Int]),ctx)
+          case Def(d@Table_Sum(_,_)) => (a:Exp[N],b:Exp[N]) => arith_pl(a,b)(mtype(d._mR),ctx, atype(d._aR))
+          case Def(d@Table_Average(_,_)) => (a:Exp[N],b:Exp[N]) => arith_pl(a,b)(mtype(d._mR),ctx, atype(d._aR))
+          case Def(d@Table1_Count(s, f)) => (a:Exp[N],b:Exp[N]) => arith_pl(a,b)(mtype(manifest[Int]),ctx, atype(implicitly[Arith[Int]]))
+          case Def(d@Table2_Count(s)) => (a:Exp[N],b:Exp[N]) => arith_pl(a,b)(mtype(manifest[Int]),ctx, atype(implicitly[Arith[Int]]))
+
           case Def(d@Table_Max(_,_)) => (a:Exp[N],b:Exp[N]) => ordering_max(a,b)(otype(d._ordR),mtype(d._mR),ctx)
           case Def(d@Table_Min(_,_)) => (a:Exp[N],b:Exp[N]) => ordering_min(a,b)(otype(d._ordR),mtype(d._mR),ctx)
           case Def(d@Internal_pack2(u,v)) => (a:Exp[Tup2[N,N]],b:Exp[Tup2[N,N]]) =>
@@ -186,7 +195,7 @@ object Run {
         }).asInstanceOf[(Exp[N],Exp[N])=>Exp[N]]
 
         def rewriteAverage[N](value: Exp[Any]): (Exp[N],Exp[Int])=>Exp[N] = (value match {
-          case Def(d@Table_Average(_,_)) => (a:Exp[N],count:Exp[Int]) => fractional_div(a, count.asInstanceOf[Exp[N]])(mtype(d._mR),frtype(d._fracR),mtype(d._mR),ctx,implicitly[Rep[N]=>Rep[N]])
+          case Def(d@Table_Average(_,_)) =>(a:Exp[N],count:Exp[Int]) => arith_div(a, count.asInstanceOf[Exp[N]])(mtype(d._mR),ctx,atype(d._aR))
           case _ => (a:Exp[N],count:Exp[N]) => a
         }).asInstanceOf[(Exp[N],Exp[Int])=>Exp[N]]
 
@@ -313,47 +322,47 @@ object Run {
       import scala.virtualization.lms.internal.{GenericFatCodegen}
 
       // prettify & indent generated code files output
-      override def emitRegisteredSource(gen: GenericFatCodegen{val IR: DeliteQuery.this.type}, stream: PrintWriter): List[(Sym[Any], Any)] = {
-        def printIndented(str: String)(out: PrintWriter): Unit = {
-          val lines = str.split("[\n\r]")
-          var indent: Int = 0
-          for (l0 <- lines) {
-            val l = l0.trim
-            if (l.length > 0) {
-              var open: Int = 0
-              var close: Int = 0
-              var initClose: Int = 0
-              var nonWsChar: Boolean = false
-              l foreach {
-                case '{' => {
-                  open += 1
-                  if (!nonWsChar) {
-                    nonWsChar = true
-                    initClose = close
-                  }
-                }
-                case '}' => close += 1
-                case x => if (!nonWsChar && !x.isWhitespace) {
-                  nonWsChar = true
-                  initClose = close
-                }
-              }
-              if (!nonWsChar) initClose = close
-              out.println("  " * (indent - initClose) + l)
-              indent += (open - close)
-            }
-          }
-          assert (indent==0, "indentation sanity check")
-        }
-        val s = new StringWriter
-        val p = new PrintWriter(s)
-        val res = super.emitRegisteredSource(gen, p)
-        p.close()
-        val content = s.toString
-        printIndented(content)(stream)
-        stream.flush()
-        res
-      }
+      // override def emitRegisteredSource(gen: GenericFatCodegen{val IR: DeliteQuery.this.type}, stream: PrintWriter): List[(Sym[Any], Any)] = {
+      //   def printIndented(str: String)(out: PrintWriter): Unit = {
+      //     val lines = str.split("[\n\r]")
+      //     var indent: Int = 0
+      //     for (l0 <- lines) {
+      //       val l = l0.trim
+      //       if (l.length > 0) {
+      //         var open: Int = 0
+      //         var close: Int = 0
+      //         var initClose: Int = 0
+      //         var nonWsChar: Boolean = false
+      //         l foreach {
+      //           case '{' => {
+      //             open += 1
+      //             if (!nonWsChar) {
+      //               nonWsChar = true
+      //               initClose = close
+      //             }
+      //           }
+      //           case '}' => close += 1
+      //           case x => if (!nonWsChar && !x.isWhitespace) {
+      //             nonWsChar = true
+      //             initClose = close
+      //           }
+      //         }
+      //         if (!nonWsChar) initClose = close
+      //         out.println("  " * (indent - initClose) + l)
+      //         indent += (open - close)
+      //       }
+      //     }
+      //     assert (indent==0, "indentation sanity check")
+      //   }
+      //   val s = new StringWriter
+      //   val p = new PrintWriter(s)
+      //   val res = super.emitRegisteredSource(gen, p)
+      //   p.close()
+      //   val content = s.toString
+      //   printIndented(content)(stream)
+      //   stream.flush()
+      //   res
+      // }
 
 
       def extractMF[T](x: Rep[Table[T]]): Manifest[T] = {
@@ -1417,7 +1426,7 @@ object Run {
                         }
                       )(mfo)
                   }.toSeq
-                )(mfo, pos, new Overload4)
+                )(mfo, pos, new Overload22)
              }
             )(mfa, mfo, pos)
             tres.asInstanceOf[Rep[Table[Record]]]

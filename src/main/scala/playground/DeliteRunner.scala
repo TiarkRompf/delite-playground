@@ -217,6 +217,7 @@ trait DeliteTestRunner extends DeliteTestModule with DeliteTestConfig with Delit
     delite_test_bw_close(out)*/
   }
 
+
 }
 
 trait DeliteTestModule extends Base {

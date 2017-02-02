@@ -1,8 +1,8 @@
 package playground
 
-import optiql.compiler._
-import optiql.library._
-import optiql.shared._
+import optimql.compiler._
+import optimql.library._
+import optimql.shared._
 import scala.reflect.{Manifest,SourceContext}
 import scala.virtualization.lms.common.Record
 
@@ -14,7 +14,7 @@ import scala.virtualization.lms.common.Record
 // object TPCHQ14Compiler extends OptiQLApplicationCompiler with TPCHQ14Trait
 
 
-trait Types { this: OptiQLApplication =>
+trait Types { this: OptiMQLApplication =>
 
   type LineItem = Record {
     val l_orderkey: Int
@@ -198,7 +198,7 @@ trait Types { this: OptiQLApplication =>
 }
 
 
-trait TPCHBaseTrait extends OptiQLApplication with Types {
+trait TPCHBaseTrait extends OptiMQLApplication with Types {
 
   def printUsage = {
     println("Usage: TPCH"+queryName+" <input directory>")
@@ -314,7 +314,7 @@ import org.apache.spark.SparkConf
 object Q1_Runner {
 
   def testRun(base: String) = {
-    object TPCHQ1Compiler extends OptiQLApplicationCompiler with TPCHQ1Trait with DeliteTestRunner {
+    object TPCHQ1Compiler extends OptiMQLApplicationCompiler with TPCHQ1Trait with DeliteTestRunner {
       override def main() {
         System.out.println("Hello")
         println("TPC-H " + queryName)
