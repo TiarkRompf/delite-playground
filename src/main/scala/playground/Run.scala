@@ -146,6 +146,7 @@ object Run {
     object DeliteQuery extends OptiMQLApplicationCompiler with DeliteTestRunner {
 
       //TODO: merge this into standard SoA transform and check safety
+      // TODO Tiark: this is not enough to have a Delite-Like OptiQL
       // override def transformLoop(stm: Stm): Option[Exp[Any]] = stm match {
       //   case TP(sym, r:DeliteOpReduceLike[_]) if r.mutable => None // mutable reduces don't work yet
       //   case TP(sym, Loop(size, v, body: DeliteReduceElem[a])) => soaReduce[a](size,v,body)(body.mA)
@@ -321,6 +322,7 @@ object Run {
       import java.io.{PrintWriter,StringWriter}
       import scala.virtualization.lms.internal.{GenericFatCodegen}
 
+      // TODO: Tiark: This code do not compile with OptiQML
       // prettify & indent generated code files output
       // override def emitRegisteredSource(gen: GenericFatCodegen{val IR: DeliteQuery.this.type}, stream: PrintWriter): List[(Sym[Any], Any)] = {
       //   def printIndented(str: String)(out: PrintWriter): Unit = {
@@ -1496,6 +1498,9 @@ object Run {
         if (preloadData) {
           toc("exec", res)
         }
+
+        val tmp = DenseVector(1, 2, 3)
+        println(tmp)
 
         val mf = extractMF(res)
         infix_printAsTable(res, 20)(mf, implicitly[SourceContext])

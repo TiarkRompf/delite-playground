@@ -2119,9 +2119,9 @@ import com.databricks.spark.csv.CsvRelation
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 
-import optiql.compiler._
-import optiql.library._
-import optiql.shared._
+import optimql.compiler._
+import optimql.library._
+import optimql.shared._
 import scala.reflect.{Manifest,SourceContext,ManifestFactory,RefinedManifest}
 import scala.virtualization.lms.common.{Record, TupleOps}
 import scala.math.Ordering
