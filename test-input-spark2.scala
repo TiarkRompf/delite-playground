@@ -2129,7 +2129,7 @@ import playground._
 import java.util.{Date, Calendar}
 import java.text._
 
-def deliteSQL(s: String) = Run.runDelite(spark.sql(s).queryExecution.optimizedPlan, false)
+// def deliteSQL(s: String) = Run.runDelite(spark.sql(s).queryExecution.optimizedPlan, false)
 
 // Tables
 val customer = (spark.read
@@ -2236,12 +2236,12 @@ def testSpark(s: String) = {
   println(s"Execution time: $executionTime")
 }
 
-def testDelite(s: String, preloadData: Boolean = false, debug: Boolean = false) = {
+def testDelite(s: String, preloadData: Boolean = false, debug: Boolean = false)(udfMap: Map[Any,Any]) = {
   val res = spark.sql(s)
 
   System.out.println(res.queryExecution.optimizedPlan)
 
-  Run.runDelite(res.queryExecution.optimizedPlan, preloadData, debug)
+  Run.runDelite(res.queryExecution.optimizedPlan, preloadData, debug)(udfMap)
 }
 
 ppl.delite.framework.Config.debug = true
@@ -2304,6 +2304,17 @@ def runbenchmark(iterations: Int, queries: String = "1,2,3,4,5,6,7,8,9,10,11,12,
       })
   }
 }
+
+def fS(lms: OptiQLApplicationCompiler) = { import lms._; (yy: Rep[Int]) => yy + yy }
+val f = (x: Int) => x
+val g = fS(_: OptiQLApplicationCompiler): Any
+val map = Map[Any,Any]()
+map(f) = g
+
+spark.udf.register("testFunction", f)
+
+testDelite("select n_nationkey, testFunction(n_nationkey) from nation")(map)
+
 
 val tpch1 =
         """

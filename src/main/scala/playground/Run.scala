@@ -30,6 +30,8 @@ object Run {
   val aggexp = "org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression"
   val expcl = "org.apache.spark.sql.catalyst.plans.logical.Expand"
 
+  type NMap = scala.collection.Map[Any,Any]
+
   def convertDataType(e: DataType, metadata: Metadata = null) : Manifest[_] = e match {
       case ByteType => manifest[Char]
       case BooleanType => manifest[Boolean]
@@ -142,8 +144,17 @@ object Run {
     case _ => (exp, 1)
   }
 
-  def runDelite(d : LogicalPlan, preloadData: Boolean, debugf: Boolean = false) = {
+  def runDelite(d : LogicalPlan, preloadData: Boolean, debugf: Boolean = false)(implicit udfMap: NMap) = {
     object DeliteQuery extends OptiQLApplicationCompiler with DeliteTestRunner {
+
+      //TODO: merge this into standard SoA transform and check safety
+      // TODO Tiark: this is not enough to have a Delite-Like OptiQL
+      // override def transformLoop(stm: Stm): Option[Exp[Any]] = stm match {
+      //   case TP(sym, r:DeliteOpReduceLike[_]) if r.mutable => None // mutable reduces don't work yet
+      //   case TP(sym, Loop(size, v, body: DeliteReduceElem[a])) => soaReduce[a](size,v,body)(body.mA)
+      //   case TP(sym, Loop(size, v, body: DeliteHashReduceElem[k,v,i,cv])) => soaHashReduce[k,v,i,cv](size,v,body)(body.mK,body.mV,body.mI,body.mCV)
+      //   case _ => super.transformLoop(stm)
+      // }
 
       // ### begin modified code for groupBy fusion from hyperdsl ###
       private def hashReduce[A:Manifest,K:Manifest,T:Manifest,R:Manifest](resultSelector: Exp[T] => Exp[R], keySelector: Exp[A] => Exp[K]): Option[(Exp[A]=>Exp[R], (Exp[R],Exp[R])=>Exp[R], (Exp[R],Exp[Int])=>Exp[R])] = {
@@ -690,6 +701,29 @@ object Run {
           val res = compile(query, null)
           val mf = extractMF(res)
           field[T](table_first(res)(mf, implicitly[SourceContext]), mf.asInstanceOf[RefinedManifest[Record]].fields.head._1)
+        case ScalaUDF(function, dataType,  children,  inputTypes) =>
+          children map { compileExpr[Any](_, input)(rec) } match {
+            case Seq(a) =>
+              val f = (udfMap(function).asInstanceOf[(OptiQLApplicationCompiler) => ((Rep[Any]) => Rep[T])])(this)
+              f(a)
+
+            case Seq(a, b) =>
+              val f = (udfMap(function).asInstanceOf[(OptiQLApplicationCompiler) => ((Rep[Any],Rep[Any]) => Rep[T])])(this)
+              f(a, b)
+
+            case Seq(a, b, c) =>
+              val f = (udfMap(function).asInstanceOf[(OptiQLApplicationCompiler) => ((Rep[Any],Rep[Any],Rep[Any]) => Rep[T])])(this)
+              f(a, b, c)
+
+            case Seq(a, b, c, d) =>
+              val f = (udfMap(function).asInstanceOf[(OptiQLApplicationCompiler) => ((Rep[Any],Rep[Any],Rep[Any],Rep[Any]) => Rep[T])])(this)
+              f(a, b, c, d)
+
+            case Seq(a, b, c, d, e) =>
+              val f = (udfMap(function).asInstanceOf[(OptiQLApplicationCompiler) => ((Rep[Any],Rep[Any],Rep[Any],Rep[Any],Rep[Any]) => Rep[T])])(this)
+              f(a, b, c, d, e)
+          }
+
         case _ =>
           throw new RuntimeException("compileExpr, TODO: " + d.getClass.getName)
       }
