@@ -30,6 +30,8 @@ object Run {
   val aggexp = "org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression"
   val expcl = "org.apache.spark.sql.catalyst.plans.logical.Expand"
 
+  type NMap = scala.collection.Map[Any,Any]
+
   def convertDataType(e: DataType, metadata: Metadata = null) : Manifest[_] = e match {
       case ByteType => manifest[Char]
       case BooleanType => manifest[Boolean]
@@ -142,7 +144,7 @@ object Run {
     case _ => (exp, 1)
   }
 
-  def runDelite(d : LogicalPlan, preloadData: Boolean, debugf: Boolean = false) = {
+  def runDelite(d : LogicalPlan, preloadData: Boolean, debugf: Boolean = false)(implicit udfMap: NMap) = {
     object DeliteQuery extends OptiMQLApplicationCompiler with DeliteTestRunner {
 
       //TODO: merge this into standard SoA transform and check safety
@@ -701,6 +703,29 @@ object Run {
           val res = compile(query, null)
           val mf = extractMF(res)
           field[T](table_first(res)(mf, implicitly[SourceContext]), mf.asInstanceOf[RefinedManifest[Record]].fields.head._1)
+        case ScalaUDF(function, dataType,  children,  inputTypes) =>
+          children map { compileExpr[Any](_, input)(rec) } match {
+            case Seq(a) =>
+              val f = (udfMap(function).asInstanceOf[(OptiMQLApplicationCompiler) => ((Rep[Any]) => Rep[T])])(this)
+              f(a)
+
+            case Seq(a, b) =>
+              val f = (udfMap(function).asInstanceOf[(OptiMQLApplicationCompiler) => ((Rep[Any],Rep[Any]) => Rep[T])])(this)
+              f(a, b)
+
+            case Seq(a, b, c) =>
+              val f = (udfMap(function).asInstanceOf[(OptiMQLApplicationCompiler) => ((Rep[Any],Rep[Any],Rep[Any]) => Rep[T])])(this)
+              f(a, b, c)
+
+            case Seq(a, b, c, d) =>
+              val f = (udfMap(function).asInstanceOf[(OptiMQLApplicationCompiler) => ((Rep[Any],Rep[Any],Rep[Any],Rep[Any]) => Rep[T])])(this)
+              f(a, b, c, d)
+
+            case Seq(a, b, c, d, e) =>
+              val f = (udfMap(function).asInstanceOf[(OptiMQLApplicationCompiler) => ((Rep[Any],Rep[Any],Rep[Any],Rep[Any],Rep[Any]) => Rep[T])])(this)
+              f(a, b, c, d, e)
+          }
+
         case _ =>
           throw new RuntimeException("compileExpr, TODO: " + d.getClass.getName)
       }
