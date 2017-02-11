@@ -3,6 +3,7 @@ package playground
 
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.SparkSession
 
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.plans._
@@ -144,8 +145,10 @@ object Run {
     case _ => (exp, 1)
   }
 
-  def runDelite(d : LogicalPlan, preloadData: Boolean, debugf: Boolean = false)(implicit udfMap: NMap) = {
-    object DeliteQuery extends OptiMQLApplicationCompiler with DeliteTestRunner {
+  def runOptiMQLExample(spark: SparkSession, file: String) = {
+    object DeliteQuery extends OptiMQLApplicationCompiler with FlareResult with DeliteTestRunner {
+
+      val preloadData = false
 
       //TODO: merge this into standard SoA transform and check safety
       // TODO Tiark: this is not enough to have a Delite-Like OptiQL
@@ -155,164 +158,6 @@ object Run {
       //   case TP(sym, Loop(size, v, body: DeliteHashReduceElem[k,v,i,cv])) => soaHashReduce[k,v,i,cv](size,v,body)(body.mK,body.mV,body.mI,body.mCV)
       //   case _ => super.transformLoop(stm)
       // }
-
-      // ### begin modified code for groupBy fusion from hyperdsl ###
-      private def hashReduce[A:Manifest,K:Manifest,T:Manifest,R:Manifest](resultSelector: Exp[T] => Exp[R], keySelector: Exp[A] => Exp[K]): Option[(Exp[A]=>Exp[R], (Exp[R],Exp[R])=>Exp[R], (Exp[R],Exp[Int])=>Exp[R])] = {
-        var failed: Boolean = false
-        val ctx = implicitly[SourceContext]
-        def rewriteMap(value: Exp[Any]): Exp[A]=>Exp[R] = (value match {
-          case Def(Field(Def(Field(s,"_1")),index)) => (a:Exp[A]) => field(keySelector(a),index)(value.tp,ctx)
-          case Def(Field(s,"_1")) => keySelector
-          case Def(Field(Def(Field(s,"_2")),index)) => (a:Exp[A]) => field(keySelector(a),index)(value.tp,ctx) // we know that it must be part of the selector ....
-          case Def(FieldApply(s,index)) => (a:Exp[A]) => field(a,index)(value.tp,ctx)
-          case Def(Table_Sum(s, sumSelector)) => sumSelector
-          case Def(Table_Average(s, avgSelector)) => avgSelector
-          case Def(Table1_Count(s, f)) => (a:Exp[A]) => if (f(a)) { unit(1) } else { unit(0) }
-          case Def(Table2_Count(s)) => (a:Exp[A]) => unit(1)
-          case Def(Table_Max(s, maxSelector)) => maxSelector
-          case Def(Table_Min(s, minSelector)) => minSelector
-          case Def(Internal_pack2(u,v)) => (a: Exp[A]) =>
-            pack(rewriteMap(u)(a), rewriteMap(v)(a))(mtype(u.tp),mtype(v.tp),ctx,implicitly)
-          // TODO: Spark/Delite
-          case Def(a) => Console.err.println("found unknown map: " + a.toString); failed = true; null
-          case _ => Console.err.println("found unknown map: " + value.toString); failed = true; null
-        }).asInstanceOf[Exp[A]=>Exp[R]]
-
-        def rewriteReduce[N](value: Exp[Any]): (Exp[N],Exp[N])=>Exp[N] = (value match {
-          case Def(Field(Def(Field(s,"_1")),index)) => (a:Exp[N],b:Exp[N]) => a
-          case Def(Field(s,"_1")) => (a:Exp[N],b:Exp[N]) => a
-          case Def(Field(Def(Field(s,"_2")),index)) => (a:Exp[N],b:Exp[N]) => a
-          case Def(d@Table_Sum(_,_)) => (a:Exp[N],b:Exp[N]) => arith_pl(a,b)(mtype(d._mR),ctx, atype(d._aR))
-          case Def(d@Table_Average(_,_)) => (a:Exp[N],b:Exp[N]) => arith_pl(a,b)(mtype(d._mR),ctx, atype(d._aR))
-          case Def(d@Table1_Count(s, f)) => (a:Exp[N],b:Exp[N]) => arith_pl(a,b)(mtype(manifest[Int]),ctx, atype(implicitly[Arith[Int]]))
-          case Def(d@Table2_Count(s)) => (a:Exp[N],b:Exp[N]) => arith_pl(a,b)(mtype(manifest[Int]),ctx, atype(implicitly[Arith[Int]]))
-
-          case Def(d@Table_Max(_,_)) => (a:Exp[N],b:Exp[N]) => ordering_max(a,b)(otype(d._ordR),mtype(d._mR),ctx)
-          case Def(d@Table_Min(_,_)) => (a:Exp[N],b:Exp[N]) => ordering_min(a,b)(otype(d._ordR),mtype(d._mR),ctx)
-          case Def(d@Internal_pack2(u,v)) => (a:Exp[Tup2[N,N]],b:Exp[Tup2[N,N]]) =>
-            pack(rewriteReduce(u)(tup2__1(a)(mtype(u.tp),ctx),tup2__1(b)(mtype(u.tp),ctx)),
-                 rewriteReduce(v)(tup2__2(a)(mtype(v.tp),ctx),tup2__2(b)(mtype(v.tp),ctx)))(mtype(u.tp),mtype(v.tp),ctx,implicitly)
-          case Def(FieldApply(s,index)) => (a:Exp[N],b:Exp[N]) => a
-          case Def(a) => Console.err.println("found unknown reduce: " + a.toString); failed = true; null
-          case _ => Console.err.println("found unknown reduce: " + value.toString); failed = true; null
-        }).asInstanceOf[(Exp[N],Exp[N])=>Exp[N]]
-
-        def rewriteAverage[N](value: Exp[Any]): (Exp[N],Exp[Int])=>Exp[N] = (value match {
-          case Def(d@Table_Average(_,_)) =>(a:Exp[N],count:Exp[Int]) => arith_div(a, count.asInstanceOf[Exp[N]])(mtype(d._mR),ctx,atype(d._aR))
-          case _ => (a:Exp[N],count:Exp[N]) => a
-        }).asInstanceOf[(Exp[N],Exp[Int])=>Exp[N]]
-
-
-        val funcs = resultSelector(fresh[T]) match {
-          case Def(Struct(tag: StructTag[R], elems)) =>
-            val valueFunc = (a:Exp[A]) => struct[R](tag, elems map { case (key, value) => (key, rewriteMap(value)(a)) })
-            val reduceFunc = (a:Exp[R],b:Exp[R]) => struct[R](tag, elems map { case (key, value) => (key, rewriteReduce(value)(field(a,key)(value.tp,ctx), field(b,key)(value.tp,ctx))) })
-            val averageFunc = (a:Exp[R],count:Exp[Int]) => struct[R](tag, elems map { case (key, value) => (key, rewriteAverage(value)(field(a,key)(value.tp,ctx), count)) })
-            (valueFunc, reduceFunc, averageFunc)
-
-          case a => (rewriteMap(a), rewriteReduce[R](a), rewriteAverage[R](a))
-        }
-
-        if (failed) None else Some(funcs)
-      }
-
-      def table_selectA[A:Manifest,R:Manifest](self: Rep[Table[A]], resultSelector: (Rep[A]) => Rep[R])(implicit __pos: SourceContext): Exp[Table[R]] = self match {
-        //case Def(QueryableWhere(origS, predicate)) => //Where-Select fusion
-        //  QueryableSelectWhere(origS, resultSelector, predicate)
-        case Def(g@Table_GroupBy(origS: Exp[Table[a]], keySelector)) => hashReduce(resultSelector, keySelector)(g._mA,g._mK,manifest[A],manifest[R]) match {
-          case Some((valueFunc, reduceFunc, averageFunc)) =>
-            //Console.err.println("fused GroupBy-Select")
-            val hr = groupByReduce(origS, keySelector, valueFunc, reduceFunc, (e:Exp[a]) => unit(true))(g._mA,g._mK,manifest[R],implicitly[SourceContext])
-            val count = groupByReduce(origS, keySelector, (e:Exp[a]) => unit(1), (a:Exp[Int],b:Exp[Int])=>forge_int_plus(a,b), (e:Exp[a])=>unit(true))(g._mA,g._mK,manifest[Int],implicitly[SourceContext])
-            bulkDivide(hr, count, averageFunc)(manifest[R],implicitly[SourceContext])
-          case None =>
-            Console.err.println("WARNING: unable to fuse GroupBy-Select")
-            return super.table_select(self, resultSelector)
-        }
-        case Def(g@Table_GroupByWhere(origS: Exp[Table[a]], keySelector, cond)) => hashReduce(resultSelector, keySelector)(g._mA,g._mK,manifest[A],manifest[R]) match {
-          case Some((valueFunc, reduceFunc, averageFunc)) =>
-            //Console.err.println("fused GroupBy-Select")
-            val hr = groupByReduce(origS, keySelector, valueFunc, reduceFunc, cond)(g._mA,g._mK,manifest[R],implicitly[SourceContext])
-            val count = groupByReduce(origS, keySelector, (e:Exp[a]) => unit(1), (a:Exp[Int],b:Exp[Int])=>forge_int_plus(a,b), cond)(g._mA,g._mK,manifest[Int],implicitly[SourceContext])
-            bulkDivide(hr, count, averageFunc)(manifest[R],implicitly[SourceContext])
-          case None =>
-            Console.err.println("WARNING: unable to fuse GroupBy-Select")
-            return super.table_select(self, resultSelector)
-        }
-        case _ => super.table_select(self, resultSelector)
-      }
-
-
-
-      override def table_select[A:Manifest,R:Manifest](self: Rep[Table[A]], resultSelector: (Rep[A]) => Rep[R])(implicit __pos: SourceContext): Exp[Table[R]] = {
-        def sel1(a: Rep[R]): Rep[R] = (a match {
-          // right now only a/b is supported. TODO: add a+b etc
-          case Def(Primitive_Forge_double_divide(a,b)) =>
-            val a1 = a/*rewriteMap(a)(e)*/.asInstanceOf[Exp[Double]] // should we recurse here?
-            val b1 = b/*rewriteMap(b)(e)*/.asInstanceOf[Exp[Double]]
-            pack(a1,b1)
-          case Def(Primitive_Forge_double_times(Const(c),b)) => b // TODO: more general case
-          case Def(Ordering_Gt(a,b@Const(c))) => a
-          case Def(Ordering_Gt(a,b)) =>
-            val a1 = a/*rewriteMap(a)(e)*/.asInstanceOf[Exp[Double]] // should we recurse here?
-            val b1 = b/*rewriteMap(b)(e)*/.asInstanceOf[Exp[Double]]
-            pack(a1,b1)
-          case Def(Struct(tag: StructTag[R], elems)) =>
-            struct[R](tag, elems map { case (key, value) => (key, sel1(value.asInstanceOf[Rep[R]])) })
-          case _ => a
-        }).asInstanceOf[Rep[R]]
-
-        def sel2(a: Rep[R])(v: Rep[R]): Rep[R] = (a match {
-          case Def(Primitive_Forge_double_divide(a,b)) =>
-            val v1 = v.asInstanceOf[Rep[Tup2[Double,Double]]]
-            val a1 = tup2__1(v1)/*sel2(a)(v._1)*/.asInstanceOf[Exp[Double]] // should we recurse here?
-            val b1 = tup2__2(v1)/*sel2(b)(v._2)*/.asInstanceOf[Exp[Double]]
-            primitive_forge_double_divide(a1,b1)
-          case Def(Primitive_Forge_double_times(Const(c:Double),b)) => // TODO: handle more general case
-            primitive_forge_double_times(Const(c),v.asInstanceOf[Rep[Double]])
-          case Def(d@Ordering_Gt(a,b@Const(c))) => ordering_gt(v,b)(d._ordA,d._mA,__pos)
-          case Def(d@Ordering_Gt(a,b)) =>
-            val v1 = v.asInstanceOf[Rep[Tup2[Double,Double]]]
-            val a1 = tup2__1(v1)/*sel2(a)(v._1)*/.asInstanceOf[Exp[Double]] // should we recurse here?
-            val b1 = tup2__2(v1)/*sel2(b)(v._2)*/.asInstanceOf[Exp[Double]]
-            assert(d._mA == manifest[Double], "FIXME: only supporting Ordering[Double]")
-            ordering_gt(a1,b1)(d._ordA.asInstanceOf[Ordering[Double]],manifest[Double],__pos)
-          case Def(Struct(tag: StructTag[R], elems)) =>
-            struct[R](tag, elems map { case (key, value) =>
-              (key, sel2(value.asInstanceOf[Rep[R]])(field[R](v,key)(mtype(value.tp),__pos))) })
-          case _ => v
-        }).asInstanceOf[Rep[R]]
-
-        def tpe1(a: Rep[R]): Manifest[R] = (a match {
-          case Def(Primitive_Forge_double_divide(a,b)) => manifest[Tup2[Double,Double]]
-          case Def(Primitive_Forge_double_times(Const(c),b)) => b.tp
-          case Def(Ordering_Gt(a,b@Const(c))) => a.tp
-          case Def(d@Ordering_Gt(a,b)) =>
-            assert(d._mA == manifest[Double], "FIXME: only supporting Ordering[Double]")
-            manifest[Tup2[Double,Double]]
-          case Def(Struct(tag: StructTag[R], elems)) =>
-            val em = elems map { case (key, value) => (key, tpe1(value.asInstanceOf[Rep[R]])) }
-            ManifestFactory.refinedType[Record](manifest[Record], em.map(_._1).toList, em.map(_._2).toList)
-          case _ => a.tp
-        }).asInstanceOf[Manifest[R]]
-
-        val isGroupBy = self match {
-          case Def(g@Table_GroupBy(origS: Exp[Table[a]], keySelector)) => true
-          case Def(g@Table_GroupByWhere(origS: Exp[Table[a]], keySelector, cond)) => true
-          case _ => false
-        }
-        if (isGroupBy) {
-          val rs = resultSelector(fresh[A])
-          val mfr = tpe1(rs)
-          val sel2func = sel2(rs) _
-
-          table_selectA(self, (x:Rep[A]) => sel1(resultSelector(x)))(manifest[A], mtype(mfr), __pos)
-               .Select(sel2func)
-        } else {
-          table_selectA(self,resultSelector)
-        }
-      }
-      // ### end groupBy fusion code ###
 
       override def structName[T](m: Manifest[T]): String = m match {
         case rm: RefinedManifest[_] =>
@@ -435,9 +280,12 @@ object Run {
           }
       }
 
+      sealed class FlareUDF
+      case class InternalUDF(func: Any) extends FlareUDF
+      case class ExternalUDF(func: Any) extends FlareUDF
 
       def compileAggExpr[T:Manifest](d: AggregateFunction, input: Map[LogicalRelation,Rep[Table[Record]]])(rec: Rep[Table[Record]]): Rep[T] = d match {
-        case Sum(child) =>
+        case org.apache.spark.sql.catalyst.expressions.aggregate.Sum(child) =>
           val res = child.dataType match {
             case FloatType  =>
               rec.Sum(l => compileExpr[Float](child, input)(l))
@@ -701,7 +549,6 @@ object Run {
                 compileExpr[T](secondbranch, input)(rec)
             case None => // System.out.println("Filter removed (" + condition + ")")
               compileExpr[T](secondbranch, input)(rec)
-          }
         case AggregateExpression(child, _, _, _) =>
           compileAggExpr[T](child, input)(rec.asInstanceOf[Rep[Table[Record]]])
         case ScalarSubquery(query, children, id) =>
@@ -709,25 +556,31 @@ object Run {
           val mf = extractMF(res)
           field[T](table_first(res)(mf, implicitly[SourceContext]), mf.asInstanceOf[RefinedManifest[Record]].fields.head._1)
         case ScalaUDF(function, dataType,  children,  inputTypes) =>
+
+          val extractedFunction = udfMap(function) match {
+            case InternalUDF(func) => func
+            case ExternalUDF(func) => (func.asInstanceOf[(OptiMQLApplicationCompiler) => Any])(this)
+          }
+
           children map { compileExpr[Any](_, input)(rec) } match {
             case Seq(a) =>
-              val f = (udfMap(function).asInstanceOf[(OptiMQLApplicationCompiler) => ((Rep[Any]) => Rep[T])])(this)
+              val f = extractedFunction.asInstanceOf[(Rep[Any]) => Rep[T]]
               f(a)
 
             case Seq(a, b) =>
-              val f = (udfMap(function).asInstanceOf[(OptiMQLApplicationCompiler) => ((Rep[Any],Rep[Any]) => Rep[T])])(this)
+              val f = extractedFunction.asInstanceOf[(Rep[Any],Rep[Any]) => Rep[T]]
               f(a, b)
 
             case Seq(a, b, c) =>
-              val f = (udfMap(function).asInstanceOf[(OptiMQLApplicationCompiler) => ((Rep[Any],Rep[Any],Rep[Any]) => Rep[T])])(this)
+              val f = extractedFunction.asInstanceOf[(Rep[Any],Rep[Any],Rep[Any]) => Rep[T]]
               f(a, b, c)
 
             case Seq(a, b, c, d) =>
-              val f = (udfMap(function).asInstanceOf[(OptiMQLApplicationCompiler) => ((Rep[Any],Rep[Any],Rep[Any],Rep[Any]) => Rep[T])])(this)
+              val f = extractedFunction.asInstanceOf[(Rep[Any],Rep[Any],Rep[Any],Rep[Any]) => Rep[T]]
               f(a, b, c, d)
 
             case Seq(a, b, c, d, e) =>
-              val f = (udfMap(function).asInstanceOf[(OptiMQLApplicationCompiler) => ((Rep[Any],Rep[Any],Rep[Any],Rep[Any],Rep[Any]) => Rep[T])])(this)
+              val f = extractedFunction.asInstanceOf[(Rep[Any],Rep[Any],Rep[Any],Rep[Any],Rep[Any]) => Rep[T]]
               f(a, b, c, d, e)
           }
 
@@ -1458,7 +1311,7 @@ object Run {
                         }
                       )(mfo)
                   }.toSeq
-                )(mfo, pos, new Overload22)
+                )(mfo, pos, new Overload24)
              }
             )(mfa, mfo, pos)
             tres.asInstanceOf[Rep[Table[Record]]]
@@ -1509,32 +1362,134 @@ object Run {
         case _ => throw new RuntimeException("unknown query operator: " + d.getClass)
       }
 
-      override def main() {
-        // println("TPC-H")
+      private val tol = 0.001 // tolerance (for convergence)
+      private val k = 4 // num clusters
 
-        var input: Map[LogicalRelation,Rep[Table[Record]]] = Map()
+      private def tableToMatrix[T:RefinedManifest](tab:Rep[Table[T]]): Rep[DenseMatrix[Double]] = {
 
-        if (preloadData) {
-          tic("load")
-          input = preload(d)
-          toc("load", input.toSeq.map(_._2.size):_*)
-          println("preload: Done")
-          tic("exec", input.toSeq.map(_._2.size):_*)
+        val a = tab.toArray
+        val numCols = implicitly[RefinedManifest[T]].fields filter { case (_, man) => man != manifest[String] } length
+        val elems = a flatMap { line =>
+          array_fromseq(implicitly[RefinedManifest[T]].fields filter {
+          case (_, man) => man != manifest[String] } map { case (name, _) => field[Double](line, name) } toSeq
+          )
         }
 
-        val res = compile(d, input)
-        System.out.println("Compiled")
+        densematrix_fromarray(elems, tab.size, numCols)
+      }
 
-        if (preloadData) {
-          toc("exec", res)
+      var udfMap: scala.collection.immutable.Map[Any,FlareUDF] = Map()
+
+      val schema = org.apache.spark.sql.types.StructType(Seq(
+        StructField("name", StringType, nullable = false),
+        StructField("cluster", IntegerType, nullable = false),
+        StructField("murder", DoubleType, nullable = false),
+        StructField("assault", IntegerType, nullable = false),
+        StructField("population", IntegerType, nullable = false),
+        StructField("rape", DoubleType, nullable = false)))
+
+      override def main() = {
+        val data = (spark.read
+          .option("delimiter", ",")
+          .option("header", "true") // use first line of all files as header
+          .option("inferschema", "false") // automatically infer data types
+          .schema(schema)
+          .csv(file))
+        data.createOrReplaceTempView("data")
+
+        // val data = Table.fromFile[Data](args(0), sep)
+        // val q = data Select(g => new Record {
+        //   val murder = g.murder
+        //   val assault = g.assault
+        //   val pop = g.pop
+        //   val rape = g.rape
+        // })
+
+        // implicit val man = extractMF(q).asInstanceOf[RefinedManifest[Record]]
+
+        val df = spark.sql("select murder, assault, population, rape from data")
+        System.out.println(df.queryExecution.optimizedPlan)
+        val tab = compile(df.queryExecution.optimizedPlan, Map())
+
+        val mat = tableToMatrix(tab)(extractMF(tab).asInstanceOf[RefinedManifest[Record]])
+        val x = DenseTrainingSet(mat, DenseVector[Double]()) // no labels
+        val m = x.numSamples
+        val n = x.numFeatures
+        val mu = (0::k, *) { i => x(randomInt(m)) }
+
+        println("m:"+m+",n:"+n+",numClusters:"+k+",mu.numRows:"+mu.numRows)
+
+        def findNearestCluster(x_i: Rep[DenseVector[Double]], mu: Rep[DenseMatrix[Double]]): Rep[Int] = {
+          (mu mapRowsToVector { row => dist(x_i, row, SQUARE) }).minIndex
         }
 
-        val tmp = DenseVector(1, 2, 3)
-        println(tmp)
+        tic(mu)
 
-        val mf = extractMF(res)
-        infix_printAsTable(res, 20)(mf, implicitly[SourceContext])
-        System.out.println("Done")
+        val newMu = untilconverged_withdiff(mu, tol){ (mu, iter) =>
+          val c = (0::m) { e => findNearestCluster(x(e), mu) }
+
+          val allWP = (0::m).groupByReduce(i => c(i), i => x(i).Clone, (a: Rep[DenseVector[Double]], b: Rep[DenseVector[Double]]) => a + b)
+          val allP = (0::m).groupByReduce(i => c(i), i => 1, (a: Rep[Int], b: Rep[Int]) => a+b)
+
+          (0::k,*) { j =>
+            val weightedpoints = fhashmap_get(allWP, j)
+            val points = fhashmap_get(allP, j)
+            val d = if (points == 0) 1 else points
+            weightedpoints / d
+          }
+        }((x, y) => dist(x, y, SQUARE)) // use SQUARE instead of the default EUC distance
+
+        toc(newMu)
+        newMu.pprint
+
+        val mockFunc = (x: Double, y: Int, z: Int, t: Double) => 1
+        spark.udf.register("classifier", mockFunc)
+
+        val realFunction = (x: Rep[Double], y: Rep[Int], z: Rep[Int], t: Rep[Double]) => {
+          val vec = DenseVector(x, y.toDouble, z.toDouble, t)
+
+          findNearestCluster(vec, newMu)
+        }
+
+        udfMap = Map(mockFunc -> InternalUDF(realFunction))
+
+        // val test = data Select { line => new Record {
+        //     val cluster = line.cluster
+        //     val classification = findNearestCluster(DenseVector(line.murder, line.assault.toDouble, line.pop.toDouble, line.rape), newMu)
+        //   }
+        // } GroupBy(_.cluster) Select { group => new Record {
+        //     val cluster = group._1
+        //     val avg1 = group._2.Average(l => if (l.classification == 0) 1.0 else 0.0)
+        //     val avg2 = group._2.Average(l => if (l.classification == 1) 1.0 else 0.0)
+        //     val avg3 = group._2.Average(l => if (l.classification == 2) 1.0 else 0.0)
+        //     val avg4 = group._2.Average(l => if (l.classification == 3) 1.0 else 0.0)
+        //   }
+        // }
+
+        // Avergae use DecimalType which seems to behave differently...
+        val dfResult = spark.sql(
+          """
+          |select
+          |   cluster,
+          |   sum(case when classification = 0 then 1 else 0 end) as class1,
+          |   sum(case when classification = 1 then 1 else 0 end) as class2,
+          |   sum(case when classification = 2 then 1 else 0 end) as class3,
+          |   sum(case when classification = 3 then 1 else 0 end) as class4
+          |from (
+          |   select
+          |     cluster,
+          |     classifier(murder, assault, population, rape) as classification
+          |   from
+          |     data
+          |  )
+          |group by
+          |   cluster
+          """.stripMargin
+        )
+        val result = compile(dfResult.queryExecution.optimizedPlan, Map())
+
+        result.printAsTable()
+
       }
     }
     DeliteRunner.compileAndTest(DeliteQuery)
