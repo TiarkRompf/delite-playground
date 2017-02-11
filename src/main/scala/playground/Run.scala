@@ -691,12 +691,17 @@ object Run {
         case IsNotNull(value) =>
           val res = !isnull(value, input)(rec.asInstanceOf[Rep[Record]])
           res.asInstanceOf[Rep[T]]
-        case If(cond, firstbranch, secondbranch) =>
-          val res = if (compileExpr[Boolean](cond, input)(rec))
-                      compileExpr[T](firstbranch, input)(rec)
-                    else
-                      compileExpr[T](secondbranch, input)(rec)
-          res.asInstanceOf[Rep[T]]
+        case If(condition, firstbranch, secondbranch) =>
+          filterUseless(condition) match {
+            case Some (condition) =>
+              val (rcond, _) = reorderString(condition)
+              if (compileExpr[Boolean](rcond, input)(rec))
+                compileExpr[T](firstbranch, input)(rec)
+              else
+                compileExpr[T](secondbranch, input)(rec)
+            case None => // System.out.println("Filter removed (" + condition + ")")
+              compileExpr[T](secondbranch, input)(rec)
+          }
         case AggregateExpression(child, _, _, _) =>
           compileAggExpr[T](child, input)(rec.asInstanceOf[Rep[Table[Record]]])
         case ScalarSubquery(query, children, id) =>
