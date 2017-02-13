@@ -1,6 +1,7 @@
 // test -- this can be run from the repl
 import org.apache.spark.sql.SparkSession
 import scala.collection.mutable._
+import java.io.FileWriter
 
 // sc.stop()
 // spark.stop
@@ -34,59 +35,107 @@ import scala.collection.mutable._
           |   l_linestatus
         """.stripMargin),
 
-     ("tpch2",
+("tpch2",
         """
-          |select
-          |   s_acctbal,
-          |   s_name,
-          |   n_name,
-          |   p_partkey,
-          |   p_mfgr,
-          |   s_address,
-          |   s_phone,
-          |   s_comment
-          |from
-          |   part,
-          |   supplier,
-          |   partsupp,
-          |   nation,
-          |   region,
-          |   (select
-          |       ps_partkey as t_ps_partkey,
-          |       min(ps_supplycost) as t_min_ps_supplycost
-          |   from
-          |       part,
-          |       partsupp,
-          |       supplier,
-          |       nation,
-          |       region
-          |   where
-          |       p_partkey = ps_partkey
-          |       and s_suppkey = ps_suppkey
-          |       and s_nationkey = n_nationkey
-          |       and n_regionkey = r_regionkey
-          |       and r_name = 'EUROPE'
-          |       and p_size = 15
-          |       and p_type like '%BRASS'
-          |   group by
-          |       ps_partkey
-          |   ) as T
-          |where
-          |   p_partkey = ps_partkey
-          |   and s_suppkey = ps_suppkey
-          |   and p_size = 15
-          |   and p_type like '%BRASS'
-          |   and s_nationkey = n_nationkey
-          |   and n_regionkey = r_regionkey
-          |   and r_name = 'EUROPE'
-          |   and p_partkey = t_ps_partkey
-          |   and ps_supplycost = t_min_ps_supplycost
-          |order by
-          |   s_acctbal desc,
-          |   n_name,
-          |   s_name,
-          |   p_partkey
-        """.stripMargin),
+	|select
+	|        s_acctbal,
+	|        s_name,
+	|       n_name,
+	|        p_partkey,
+	|        p_mfgr,
+	|        s_address,
+	|        s_phone,
+	|        s_comment
+	| from
+	|        part,
+	|        supplier,
+	|        partsupp,
+	|        nation,
+	|        region
+	| where
+	|        p_partkey = ps_partkey
+	|        and s_suppkey = ps_suppkey
+	|        and p_size = 15
+	|        and p_type like '%BRASS'
+	|        and s_nationkey = n_nationkey
+	|        and n_regionkey = r_regionkey
+	|        and r_name = 'EUROPE'
+	|        and ps_supplycost = (
+	|                select
+	|                        min(ps_supplycost)
+	|                from
+	|                        partsupp,
+	|                        supplier,
+	|                        nation,
+	|                        region
+	|                where
+	|                        p_partkey = ps_partkey
+	|                        and s_suppkey = ps_suppkey
+	|                        and s_nationkey = n_nationkey
+	|                        and n_regionkey = r_regionkey
+	|                        and r_name = 'EUROPE'
+	|        )
+	| order by
+	|        s_acctbal desc,
+	|        n_name,
+	|        s_name,
+	|        p_partkey
+	| limit 100
+	""".stripMargin),
+
+    // ("tpch2",
+    //    """
+    //      |select
+    //      |   s_acctbal,
+    //      |   s_name,
+    //      |   n_name,
+    //      |   p_partkey,
+    //      |   p_mfgr,
+    //      |   s_address,
+    //      |   s_phone,
+    //      |   s_comment
+    //      |from
+    //      |   part,
+    //      |   supplier,
+    //      |   partsupp,
+    //      |   nation,
+    //      |   region,
+    //      |   (select
+    //      |       ps_partkey as t_ps_partkey,
+    //      |       min(ps_supplycost) as t_min_ps_supplycost
+    //      |   from
+    //      |       part,
+    //      |       partsupp,
+    //      |       supplier,
+    //      |       nation,
+    //      |       region
+    //      |   where
+    //      |       p_partkey = ps_partkey
+    //      |       and s_suppkey = ps_suppkey
+    //      |       and s_nationkey = n_nationkey
+    //      |       and n_regionkey = r_regionkey
+    //      |       and r_name = 'EUROPE'
+    //      |       and p_size = 15
+    //      |       and p_type like '%BRASS'
+    //      |   group by
+    //      |       ps_partkey
+    //      |   ) as T
+    //      |where
+    //      |   p_partkey = ps_partkey
+    //      |   and s_suppkey = ps_suppkey
+    //      |   and p_size = 15
+    //      |   and p_type like '%BRASS'
+    //      |   and s_nationkey = n_nationkey
+    //      |   and n_regionkey = r_regionkey
+    //      |   and r_name = 'EUROPE'
+    //      |   and p_partkey = t_ps_partkey
+    //      |   and ps_supplycost = t_min_ps_supplycost
+    //      |order by
+    //      |   s_acctbal desc,
+    //      |   n_name,
+    //      |   s_name,
+    //      |   p_partkey
+    //    """.stripMargin),
 
      ("tpch3",
         """
@@ -676,12 +725,12 @@ import scala.collection.mutable._
           | sum(c_acctbal) as totacctbal
           |from
           |  (select
-          |   substring(c_phone from 1 for 2) as cntrycode,
+          |   substring(c_phone, 1, 2) as cntrycode,
           |   c_acctbal
           | from
           |   customer
           | where
-          |   substring(c_phone from 1 for 2) in
+          |   substring(c_phone, 1, 2) in
           |     ('13','31','23','29','30','18','17')
           |   and c_acctbal > (
           |     select
@@ -690,7 +739,7 @@ import scala.collection.mutable._
           |       customer
           |     where
           |       c_acctbal > 0.00
-          |     and substring (c_phone from 1 for 2) in
+          |     and substring (c_phone, 1, 2) in
           |       ('13','31','23','29','30','18','17')
           |   )
           |   and not exists (
@@ -711,7 +760,7 @@ import scala.collection.mutable._
       )
 
 val tpch_string = Seq(
-  ("tpch1",
+  ("tpch01",
      """
        |select
        |   l_returnflag,
@@ -736,7 +785,56 @@ val tpch_string = Seq(
        |   l_linestatus
      """.stripMargin),
 
-  ("tpch2",
+("tpch2orig",
+        """
+        |select
+        |        s_acctbal,
+        |        s_name,
+        |       n_name,
+        |        p_partkey,
+        |        p_mfgr,
+        |        s_address,
+        |        s_phone,
+        |        s_comment
+        | from
+        |        part,
+        |        supplier,
+        |        partsupp,
+        |        nation,
+        |        region
+        | where
+        |        p_partkey = ps_partkey
+        |        and s_suppkey = ps_suppkey
+        |        and p_size = 15
+        |        and p_type like '%BRASS'
+        |        and s_nationkey = n_nationkey
+        |        and n_regionkey = r_regionkey
+        |        and r_name = 'EUROPE'
+        |        and ps_supplycost = (
+        |                select
+        |                        min(ps_supplycost)
+        |                from
+        |                        partsupp,
+        |                        supplier,
+        |                        nation,
+        |                        region
+        |                where
+        |                        p_partkey = ps_partkey
+        |                        and s_suppkey = ps_suppkey
+        |                        and s_nationkey = n_nationkey
+        |                        and n_regionkey = r_regionkey
+        |                        and r_name = 'EUROPE'
+        |        )
+        | order by
+        |        s_acctbal desc,
+        |        n_name,
+        |        s_name,
+        |        p_partkey
+        | limit 100
+        """.stripMargin),
+
+
+  ("tpch02",
      """
        |select
        |   s_acctbal,
@@ -790,7 +888,7 @@ val tpch_string = Seq(
        |   p_partkey
      """.stripMargin),
 
-  ("tpch3",
+  ("tpch03",
      """
        |select
        | l_orderkey,
@@ -841,7 +939,7 @@ val tpch_string = Seq(
        | o_orderpriority
      """.stripMargin),
 
-   ("tpch4",
+   ("tpch04",
      """
        |select
        | o_orderpriority,
@@ -858,7 +956,7 @@ val tpch_string = Seq(
        | o_orderpriority
      """.stripMargin),
 
-   ("tpch5",
+   ("tpch05",
      """
        |select
        | n_name,
@@ -886,7 +984,7 @@ val tpch_string = Seq(
        | revenue desc
      """.stripMargin),
 
-   ("tpch6",
+   ("tpch06",
      """
        |select
        | sum(l_extendedprice*l_discount) as revenue
@@ -899,7 +997,7 @@ val tpch_string = Seq(
        | and l_quantity < 24
      """.stripMargin),
 
-   ("tpch7",
+   ("tpch07",
      """
        |select
        | supp_nation,
@@ -941,7 +1039,7 @@ val tpch_string = Seq(
        | l_year
      """.stripMargin),
 
-  ("tpch8",
+  ("tpch08",
      """
        |select
        | o_year,
@@ -982,7 +1080,7 @@ val tpch_string = Seq(
        | o_year
      """.stripMargin),
 
-   ("tpch9",
+   ("tpch09",
      """select
        | nation,
        | o_year,
@@ -1715,7 +1813,6 @@ val tpch_string = Seq(
        |order by
        |        cntrycode
      """.stripMargin)
-
    )
 
 def getQuery(seq: Seq[(String, String)], name: String) = {
@@ -1723,9 +1820,16 @@ def getQuery(seq: Seq[(String, String)], name: String) = {
 }
 
 val tpch_opt_string = Seq(
-  getQuery(tpch_string, "tpch1"),
+  getQuery(tpch_string, "tpch01"),
 
-  ("tpch2",
+  ("tpchtestQ",
+   """select
+          |   l_orderkey
+          |from
+          |   lineitem
+        """.stripMargin),
+
+  ("tpch02",
     """with A as (select * from region, nation where n_regionkey = r_regionkey and r_name = 'EUROPE'),
       |B as (select * from A, supplier where s_nationkey = n_nationkey),
       |C as (select ps_partkey as int_ps_partkey, min(ps_supplycost) as min_cost from B, partsupp where s_suppkey = ps_suppkey group by ps_partkey),
@@ -1753,36 +1857,54 @@ val tpch_opt_string = Seq(
       |limit 100
     """.stripMargin),
 
-  getQuery(tpch_string, "tpch3"),
+  getQuery(tpch_string, "tpch03"),
 
-  getQuery(tpch_string, "tpch4"),
+  getQuery(tpch_string, "tpch04"),
 
-  ("tpch5",
-    """with A as (select * from region, nation where n_regionkey = r_regionkey),
-      |B as (select * from A, customer where c_nationkey = n_nationkey),
-      |C as (select * from B, orders where c_custkey = o_custkey),
-      |D as (select * from C, lineitem where l_orderkey = o_orderkey)
-      |select
-      | n_name,
-      | sum(l_extendedprice * (1 - l_discount)) as revenue
-      |from
-      | supplier, D
-      |where
-      | l_suppkey = s_suppkey
-      | and c_nationkey = s_nationkey
-      | and s_nationkey = n_nationkey
-      | and r_name = 'ASIA'
-      | and o_orderdate >= to_date('1994-01-01')
-      | and o_orderdate < to_date('1995-01-01')
-      |group by
-      | n_name
-      |order by
-      | revenue desc
-    """.stripMargin),
+("tpch05",
+"""with A as (select n_name, n_nationkey, l_extendedprice, l_discount, l_suppkey, c_nationkey from  region, nation, customer, orders, lineitem
+   |where l_orderkey = o_orderkey and c_custkey = o_custkey and n_regionkey = r_regionkey and r_name = 'ASIA' and o_orderdate >= to_date('1994-01-01') and o_orderdate < to_date('1995-01-01'))
+   |select
+   | n_name,
+   | sum(l_extendedprice * (1 - l_discount)) as revenue
+   |from
+   | supplier, A
+   |where
+   | s_nationkey = n_nationkey
+   | and l_suppkey = s_suppkey
+   | and c_nationkey = s_nationkey
+   |group by
+   | n_name
+   |order by
+   | revenue desc
+   """.stripMargin),
 
-  getQuery(tpch_string, "tpch6"),
+ //("tpch05",
+ //   """with A as (select * from region, nation where n_regionkey = r_regionkey),
+ //     |B as (select * from A, customer where c_nationkey = n_nationkey),
+ //     |C as (select * from B, orders where c_custkey = o_custkey),
+ //     |D as (select * from C, lineitem where l_orderkey = o_orderkey)
+ //     |select
+ //     | n_name,
+ //     | sum(l_extendedprice * (1 - l_discount)) as revenue
+ //     |from
+ //     | supplier, D
+ //     |where
+ //     | l_suppkey = s_suppkey
+ //     | and c_nationkey = s_nationkey
+ //     | and s_nationkey = n_nationkey
+ //     | and r_name = 'ASIA'
+ //     | and o_orderdate >= to_date('1994-01-01')
+ //     | and o_orderdate < to_date('1995-01-01')
+ //     |group by
+ //     | n_name
+ //      |order by
+ //     | revenue desc
+ //   """.stripMargin),
 
-  ("tpch7",
+  getQuery(tpch_string, "tpch06"),
+
+  ("tpch07",
     """with A as (select n1.n_name as supp_nation, n2.n_name as cust_nation, n1.n_nationkey as n1key, n2.n_nationkey as n2key from nation n1, nation n2 where (n1.n_name = 'FRANCE' and n2.n_name = 'GERMANY') or (n1.n_name = 'GERMANY' and n2.n_name = 'FRANCE')),
       |B as (select * from A, customer where c_nationkey = n2key),
       |C as (select * from B, orders where c_custkey = o_custkey),
@@ -1815,7 +1937,7 @@ val tpch_opt_string = Seq(
       | l_year
     """.stripMargin),
 
-  ("tpch8",
+  ("tpch08",
     """with A as (select * from region, nation where n_regionkey = r_regionkey),
       |B as (select * from part, lineitem where p_partkey = l_partkey),
       |C as (select * from B, orders where l_orderkey = o_orderkey),
@@ -1849,35 +1971,138 @@ val tpch_opt_string = Seq(
       | o_year
     """.stripMargin),
 
-("tpch9",
-  """with A as (select * from nation, supplier where s_nationkey = n_nationkey),
-    |B as (select * from part, partsupp where p_partkey = ps_partkey and p_name like '%green%'),
-    |C as (select * from A, B where s_suppkey = ps_suppkey),
-    |D as (select * from C, lineitem where p_partkey = l_partkey and s_suppkey = l_suppkey and ps_suppkey = l_suppkey and ps_partkey = l_partkey)
-    | select
-    | nation,
-    | o_year,
-    | sum(amount) as sum_profit
-    |from (
-    | select
-    |   n_name as nation,
-    |   year(o_orderdate) as o_year,
-    |   l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
-    | from
-    |   D join orders
-    |     on o_orderkey = l_orderkey
-    | ) as profit
-    |group by
-    | nation,
-    | o_year
-    |order by
-    | nation,
-    | o_year desc
-  """.stripMargin),
+
+//("tpch05","""select
+//          | n_name,
+//          | sum(l_extendedprice * (1 - l_discount)) as revenue
+//          |from
+//          | customer,
+//          | orders,
+//          | lineitem,
+//          | supplier,
+//          | nation,
+//          | region
+//          |where
+//          | s_nationkey = n_nationkey
+//          | and l_suppkey = s_suppkey
+//          | and l_orderkey = o_orderkey
+//          | and c_custkey = o_custkey
+//          | and c_nationkey = s_nationkey
+//          | and n_regionkey = r_regionkey
+//          | and r_name = 'ASIA'
+//          | and o_orderdate >= date '1994-01-01'
+//          | and o_orderdate < date '1995-01-01'
+ //         |group by
+ //         | n_name
+ //         |order by
+ //         | revenue desc
+  //      """.stripMargin),
+
+("tpch09",
+"""select
+       | nation,
+       | o_year,
+       | sum(amount) as sum_profit
+       |from (
+       | select
+       |   n_name as nation,
+       |   year(o_orderdate) as o_year,
+       |   l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
+       | from nation, supplier, part, partsupp, lineitem, orders
+       | where
+       |   s_suppkey = l_suppkey
+       |   and ps_suppkey = l_suppkey
+       |   and ps_partkey = l_partkey
+       |   and p_partkey = l_partkey
+       |   and o_orderkey = l_orderkey
+       |   and s_nationkey = n_nationkey
+       |   and p_name like '%green%'
+       | ) as profit
+       |group by
+       | nation,
+       | o_year
+       |order by
+       | nation,
+       | o_year desc
+     """.stripMargin),
+//("tpch09",
+//     """with A as (select p_partkey, ps_partkey, ps_suppkey, ps_supplycost from part, partsupp where p_partkey = ps_partkey and p_name like '%green%')
+//       |select
+//       | nation,
+//       | o_year,
+//       | sum(amount) as sum_profit
+//       |from (
+//       | select
+//       |   n_name as nation,
+//       |   year(o_orderdate) as o_year,
+//       |   l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
+//       | from  nation, supplier, A, lineitem, orders
+//       | where
+//       |   o_orderkey = l_orderkey
+//       |   and A.ps_suppkey = l_suppkey
+//       |   and A.ps_partkey = l_partkey
+//       |   and A.p_partkey = l_partkey
+//       |   and s_suppkey = l_suppkey
+//       |   and s_suppkey = A.ps_suppkey
+//       |   and s_nationkey = n_nationkey
+//       |
+//       | ) as profit
+//       |group by
+//       | nation,
+//       | o_year
+//       |order by
+//       | nation,
+//       | o_year desc
+//     """.stripMargin),
+
+//("tpch09",
+//"""with A as (select * from nation, supplier where s_nationkey = n_nationkey),
+//    |B as (select * from part, partsupp where p_partkey = ps_partkey and p_name like '%green%'),
+//    |C as (select * from A, B where s_suppkey = ps_suppkey),
+//    |D as (select * from C, lineitem where p_partkey = l_partkey and s_suppkey = l_suppkey and ps_suppkey = l_suppkey and ps_partkey = l_partkey),
+//    |E as (select n_name as nation, year(o_orderdate) as o_year, l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount from
+//    |   D join orders on o_orderkey = l_orderkey)
+//    | select
+//    | nation,
+//    | o_year,
+//    | sum(amount) as sum_profit
+//    |from E
+//    |group by
+//    | nation,
+//    | o_year
+//    |order by
+//    | nation,
+//    | o_year desc
+//  """.stripMargin),
+
+//("tpch09",
+//  """with A as (select * from nation, supplier where s_nationkey = n_nationkey),
+//    |B as (select * from part, partsupp where p_partkey = ps_partkey and p_name like '%green%'),
+//    |C as (select * from A, B where s_suppkey = ps_suppkey),
+//    |D as (select * from C, lineitem where p_partkey = l_partkey and s_suppkey = l_suppkey and ps_suppkey = l_suppkey and ps_partkey = l_partkey)
+//    | select
+//    | nation,
+//    | o_year,
+//    | sum(amount) as sum_profit
+//    |from (
+//    | select
+//    |   n_name as nation,
+//    |   year(o_orderdate) as o_year,
+//    |   l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
+//    | from
+//    |   D join orders
+//    |     on o_orderkey = l_orderkey
+//    | ) as profit
+//    |group by
+//    | nation,
+//    | o_year
+//    |order by
+//    | nation,
+//    | o_year desc
+//  """.stripMargin),
 
 ("tpch10",
-  """with A as (select * from orders, customer where c_custkey = o_custkey),
-    |B as (select * from nation, A where c_nationkey = n_nationkey)
+"""with A as (select c_custkey, c_acctbal, c_name, c_address,  c_phone, c_comment, c_nationkey, o_orderkey, o_orderdate from orders, customer where c_custkey = o_custkey)
     |select
     | c_custkey,
     | c_name,
@@ -1888,9 +2113,10 @@ val tpch_opt_string = Seq(
     | c_phone,
     | c_comment
     |from
-    | B, lineitem
+    | nation, A, lineitem
     |where
     | l_orderkey = o_orderkey
+    | and A.c_nationkey = n_nationkey
     | and o_orderdate >= to_date('1993-10-01')
     | and o_orderdate < to_date('1994-01-01')
     | and l_returnflag = 'R'
@@ -1905,6 +2131,37 @@ val tpch_opt_string = Seq(
     |order by
     | revenue desc
   """.stripMargin),
+
+//("tpch10",
+//  """with A as (select * from orders, customer where c_custkey = o_custkey),
+//    |B as (select * from nation, A where c_nationkey = n_nationkey)
+//    |select
+//    | c_custkey,
+//    | c_name,
+//    | sum(l_extendedprice * (1 - l_discount)) as revenue,
+//    | c_acctbal,
+//    | n_name,
+//    | c_address,
+//    | c_phone,
+//    | c_comment
+//    |from
+//    | B, lineitem
+//    |where
+//    | l_orderkey = o_orderkey
+//    | and o_orderdate >= to_date('1993-10-01')
+//    | and o_orderdate < to_date('1994-01-01')
+//    | and l_returnflag = 'R'
+//    |group by
+//    | c_custkey,
+//    | c_name,
+//    | c_acctbal,
+//    | c_phone,
+//    | n_name,
+//    | c_address,
+//    | c_comment
+//    |order by
+//    | revenue desc
+//  """.stripMargin),
 
 ("tpch11",
   """with A as (select * from nation, supplier where s_nationkey = n_nationkey and n_name = 'GERMANY'),
@@ -1982,11 +2239,11 @@ getQuery(tpch_string, "tpch19"),
   """.stripMargin),
 
 ("tpch21",
-  """with Z as (select * from lineitem where l_receiptdate > l_commitdate),
+"""with Z as (select * from lineitem where l_receiptdate > l_commitdate),
     |A as (select * from nation, supplier where s_nationkey = n_nationkey and n_name = 'SAUDI ARABIA'),
     |B as (select * from A, Z where s_suppkey = l_suppkey),
     |C as (select * from B, orders where o_orderkey = l_orderkey and o_orderstatus = 'F'),
-    |D as (select * from C left semi join Z on not (Z.l_orderkey = C.l_orderkey and Z.l_suppkey <> C.l_suppkey))
+    |D as (select * from C anti join Z on (Z.l_orderkey = C.l_orderkey and Z.l_suppkey <> C.l_suppkey))
     |select
     |   s_name,
     |   count(*) as numwait
@@ -1999,6 +2256,108 @@ getQuery(tpch_string, "tpch19"),
     |   s_name
     |limit 100
   """.stripMargin),
+
+
+
+//("tpch21orig",
+//        """select
+//          | s_name,
+//          | count(*) as numwait
+//          |from
+//          | supplier,
+//          | lineitem l1,
+//          | orders,
+//          | nation
+//          |where
+//          | s_suppkey = l1.l_suppkey
+//          | and o_orderkey = l1.l_orderkey
+//          | and o_orderstatus = 'F'
+//          | and l1.l_receiptdate > l1.l_commitdate
+//          | and exists (
+//          |   select
+//          |     *
+//          |   from
+//          |     lineitem l2
+//          |   where
+//          |     l2.l_orderkey = l1.l_orderkey
+//          |     and l2.l_suppkey <> l1.l_suppkey
+//          | )
+//          | and not exists (
+//          |   select
+//          |     *
+//          |   from
+//          |     lineitem l3
+//          |   where
+//          |     l3.l_orderkey = l1.l_orderkey
+//          |     and l3.l_suppkey <> l1.l_suppkey
+//          |     and l3.l_receiptdate > l3.l_commitdate
+//          | )
+//          | and s_nationkey = n_nationkey
+//          | and n_name = 'SAUDI ARABIA'
+//          |group by
+//          | s_name
+//          |order by
+//          | numwait desc,
+//          | s_name
+//        """.stripMargin),
+
+//("tpch21",
+//  """with Z as (select * from lineitem where l_receiptdate > l_commitdate),
+//    |A as (select * from nation, supplier where s_nationkey = n_nationkey and n_name = 'SAUDI ARABIA'),
+//    |B as (select * from A, Z where s_suppkey = l_suppkey),
+//    |C as (select * from B, orders where o_orderkey = l_orderkey and o_orderstatus = 'F'),
+//    |D as (select * from C left semi join Z on not (Z.l_orderkey = C.l_orderkey and Z.l_suppkey <> C.l_suppkey))
+//    |select
+//    |   s_name,
+//    |   count(*) as numwait
+//    |from
+//    |   D left semi join lineitem as L on D.l_orderkey = L.l_orderkey and D.l_suppkey <> L.l_suppkey
+//    |group by
+//    |   s_name
+//    |order by
+//    |   numwait desc,
+//    |   s_name
+//    |limit 100
+//  """.stripMargin),
+
+//("tpch22",
+//        """select
+//          | cntrycode,
+//          | count(*) as numcust,
+//          | sum(c_acctbal) as totacctbal
+//          |from
+//          |  (select
+//          |   substring(c_phone, 1, 2) as cntrycode,
+//          |   c_acctbal
+//          | from
+//          |   customer
+//          | where
+//          |   substring(c_phone, 1, 2) in
+//          |     ('13','31','23','29','30','18','17')
+//          |   and c_acctbal > (
+//          |     select
+//          |       avg(c_acctbal)
+//          |     from
+//          |       customer
+//          |     where
+//          |       c_acctbal > 0.00
+//          |     and substring (c_phone, 1, 2) in
+//          |       ('13','31','23','29','30','18','17')
+//          |   )
+//          |   and not exists (
+//          |     select
+//          |       *
+//          |     from
+//          |       orders
+//          |     where
+//          |     o_custkey = c_custkey
+//          |   )
+//          | ) as custsale
+//          |group by
+//          | cntrycode
+//          |order by
+//          | cntrycode
+//        """.stripMargin)
 
 ("tpch22",
   """with A as (select * from customer where c_acctbal > 0.00 and substring(c_phone, 1, 2) in ('13', '31', '23', '29', '30', '18', '17')),
@@ -2017,7 +2376,227 @@ getQuery(tpch_string, "tpch19"),
   """.stripMargin)
 )
 
-val folder = "/home/greg/Research/data/SF1/"
+val tpch_revised = Seq(
+getQuery(tpch_string, "tpch01"),
+
+("tpch02", """ with A as(select ps_partkey, min(ps_supplycost) as minSupp from region, nation, supplier, partsupp  where  s_suppkey = ps_suppkey and s_nationkey = n_nationkey and n_regionkey = r_regionkey and r_name = 'EUROPE' group by ps_partkey),
+|  B as ( select p_partkey, p_mfgr, ps_suppkey from part, A, partsupp where p_partkey = partsupp.ps_partkey and partsupp.ps_supplycost = A.minSupp and p_partkey = A.ps_partkey and p_size = 15 and p_type like '%BRASS')
+|select
+|        s_acctbal,
+|        s_name,
+|        n_name,
+|        p_partkey,
+|        p_mfgr,
+|        s_address,
+|        s_phone,
+|        s_comment
+|from  region, nation, supplier, B
+|
+|where
+|       s_suppkey = B.ps_suppkey
+|       and s_nationkey = n_nationkey
+|       and n_regionkey = r_regionkey
+|       and r_name = 'EUROPE'
+|order by
+|        s_acctbal desc,
+|        n_name,
+|        s_name,
+|        p_partkey
+|limit 100
+""".stripMargin
+),
+
+getQuery(tpch_string, "tpch03"),
+
+getQuery(tpch_string, "tpch04"),
+
+("tpch05",
+"""with A as (select n_name, n_nationkey, l_extendedprice, l_discount, l_suppkey, c_nationkey from  region, nation, customer, orders, lineitem
+   |where l_orderkey = o_orderkey and c_custkey = o_custkey and n_regionkey = r_regionkey and r_name = 'ASIA' and o_orderdate >= to_date('1994-01-01') and o_orderdate < to_date('1995-01-01'))
+   |select
+   | n_name,
+   | sum(l_extendedprice * (1 - l_discount)) as revenue
+   |from
+   | supplier, A
+   |where
+   | s_nationkey = n_nationkey
+   | and l_suppkey = s_suppkey
+   | and c_nationkey = s_nationkey
+   |group by
+   | n_name
+   |order by
+   | revenue desc
+   """.stripMargin),
+
+getQuery(tpch_string, "tpch06"),
+
+ ("tpch07",
+ """ with A as (select l_suppkey, n1.n_nationkey as n1natkey, n1.n_name as supp_nation, n2.n_name as cust_nation, year(l_shipdate) as l_year, l_extendedprice * (1 - l_discount) as volume
+          | from nation n1, nation n2, customer, orders, lineitem where o_orderkey = l_orderkey and c_custkey = o_custkey
+          | and c_nationkey = n2.n_nationkey
+          | and ((n1.n_name = 'FRANCE' and n2.n_name = 'GERMANY') or (n1.n_name = 'GERMANY' and n2.n_name = 'FRANCE'))
+          | and l_shipdate between to_date('1995-01-01') and to_date('1996-12-31'))
+          |select
+          | supp_nation,
+          | cust_nation,
+          | l_year,
+          | sum(volume) as revenue
+          |from
+          |   supplier,
+          |   A
+          | where
+          |   s_suppkey = A.l_suppkey
+          |   and s_nationkey = A.n1natkey
+          |group by
+          | supp_nation,
+          | cust_nation,
+          | l_year
+          |order by
+          | supp_nation,
+          | cust_nation,
+          | l_year
+        """.stripMargin
+),
+
+("tpch08",
+"""with A as (select o_orderdate, l_suppkey, c_nationkey,l_extendedprice,l_discount
+          |from part, lineitem, orders, customer
+          | where p_partkey = l_partkey  and l_orderkey = o_orderkey and o_custkey = c_custkey
+          | and o_orderdate between to_date('1995-01-01') and to_date('1996-12-31') and p_type = 'ECONOMY ANODIZED STEEL' ),
+          | B as (select  * from region, nation as n1, A, supplier where s_suppkey = A.l_suppkey and  A.c_nationkey = n1.n_nationkey and r_name = 'AMERICA' and n1.n_regionkey = r_regionkey)
+          |select
+          | o_year,
+          | sum(case
+          |   when all_nations.nation = 'BRAZIL'
+          |   then volume
+          |   else 0
+          | end) / sum(volume) as mkt_share
+          |from (
+          | select
+          |   year(o_orderdate) as o_year,
+          |   l_extendedprice * (1-l_discount) as volume,
+          |   n2.n_name as nation
+          | from
+          |   B,
+          |   nation n2
+          | where
+          |    s_nationkey = n2.n_nationkey
+          | ) as all_nations
+          |group by
+          | o_year
+          |order by
+          | o_year
+""".stripMargin
+),
+
+
+("tpch09",
+"""select
+       | nation,
+       | o_year,
+       | sum(amount) as sum_profit
+       |from (
+       | select
+       |   n_name as nation,
+       |   year(o_orderdate) as o_year,
+       |   l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
+       | from nation, supplier, part, partsupp, lineitem, orders
+       | where
+       |   s_suppkey = l_suppkey
+       |   and ps_suppkey = l_suppkey
+       |   and ps_partkey = l_partkey
+       |   and p_partkey = l_partkey
+       |   and o_orderkey = l_orderkey
+       |   and s_nationkey = n_nationkey
+       |   and p_name like '%green%'
+       | ) as profit
+       |group by
+       | nation,
+       | o_year
+       |order by
+       | nation,
+       | o_year desc
+     """.stripMargin),
+
+("tpch10",
+"""with A as (select c_custkey, c_acctbal, c_name, c_address,  c_phone, c_comment, c_nationkey, o_orderkey, o_orderdate from orders, customer where c_custkey = o_custkey)
+    |select
+    | c_custkey,
+    | c_name,
+    | sum(l_extendedprice * (1 - l_discount)) as revenue,
+    | c_acctbal,
+    | n_name,
+    | c_address,
+    | c_phone,
+    | c_comment
+    |from
+    | nation, A, lineitem
+    |where
+    | l_orderkey = o_orderkey
+    | and A.c_nationkey = n_nationkey
+    | and o_orderdate >= to_date('1993-10-01')
+    | and o_orderdate < to_date('1994-01-01')
+    | and l_returnflag = 'R'
+    |group by
+    | c_custkey,
+    | c_name,
+    | c_acctbal,
+    | c_phone,
+    | n_name,
+    | c_address,
+    | c_comment
+    |order by
+    | revenue desc
+  """.stripMargin)
+
+
+//getQuery(tpch_string, "tpch12"),
+
+//getQuery(tpch_string, "tpch13"),
+
+//getQuery(tpch_string, "tpch14"),
+
+//getQuery(tpch_string, "tpch15"),
+
+//getQuery(tpch_string, "tpch16"),
+
+//getQuery(tpch_string, "tpch17"),
+
+//getQuery(tpch_string, "tpch19")
+)
+
+val tpch_noTempRelation =  Seq(
+
+("tpch09",
+"""select
+       | nation,
+       | o_year,
+       | sum(amount) as sum_profit
+       |from (
+       | select
+       |   n_name as nation,
+       |   year(o_orderdate) as o_year,
+       |   l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
+       | from nation, supplier, part, partsupp, lineitem, orders
+       | where
+       |   s_suppkey = l_suppkey
+       |   and ps_suppkey = l_suppkey
+       |   and ps_partkey = l_partkey
+       |   and p_partkey = l_partkey
+       |   and o_orderkey = l_orderkey
+       |   and s_nationkey = n_nationkey
+       |   and p_name like '%green%'
+       | ) as profit
+       |group by
+       | nation,
+       | o_year
+       |order by
+       | nation,
+       | o_year desc
+     """.stripMargin)
+)
+//val folder = "/data/query/SF1/"
+val folder = "/home/gesserte/Research/data/SF1/"
 // val file = folder + "tpch_2_17_0/dbgen/lineitem.tbl"
 val file_part = folder + "part.tbl"
 val file_supplier = folder + "supplier.tbl"
@@ -2315,28 +2894,134 @@ spark.udf.register("testFunction", f)
 
 testDelite("select n_nationkey, testFunction(n_nationkey) from nation")(map)
 
+// def runbenchmarkSpark(iterations: Int, queries: String = "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22") = {
+//   val res = HashMap[String,ArrayBuffer[Double]]()
+//   preload()
+//
+//   for (it <- 1 to iterations) {
+//     println(s"Iteration $it")
+//     queries.split(",").map({
+//       (n:String) => getQuery(tpch_opt_string, s"tpch${n}")
+//     }).foreach({
+//         case (name: String, sql: String) =>
+//           println(s"\tQuery $name")
+//           val df = spark.sql(sql)
+//           val queryExecution = df.queryExecution
+//           // We are not counting the time of ScalaReflection.convertRowToScala.
+//           val parsingTime = measureTimeMs {
+//             queryExecution.logical
+//           }
+//           val analysisTime = measureTimeMs {
+//             queryExecution.analyzed
+//           }
+//           val optimizationTime = measureTimeMs {
+//             queryExecution.optimizedPlan
+//           }
+//           val planningTime = measureTimeMs {
+//             queryExecution.executedPlan
+//           }
+//
+//           val executionTime = measureTimeMs {
+//             df.rdd.foreach { row => Unit }
+//           }
+//
+//           val resq = res getOrElseUpdate (name, ArrayBuffer[Double]())
+//           resq += executionTime
+//           println("Results:")
+//           res.toSeq.sortWith((a,b) => a._1.length < b._1.length || (a._1.length == b._1.length && a._1 < b._1)) foreach { case (name, resq) =>
+//             print(name + ", ")
+//             resq foreach { d => print(d + ",") }
+//             println(resq.min)
+//           }
+//       })
+//   }
+// }
+//
+ def runbenchmarkDelite(iterations: Int, queries: String = "01,02,03,04,05,06,07,08,09,10,11,12,13,14,15,16,17,18,19,20,21,22") = {
 
-val tpch1 =
-        """
-          |select
-          |   l_returnflag,
-          |   l_linestatus,
-          |   sum(l_quantity) as sum_qty,
-          |   sum(l_extendedprice) as sum_base_price,
-          |   sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
-          |   sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
-          |   avg(l_quantity) as avg_qty,
-          |   avg(l_extendedprice) as avg_price,
-          |   avg(l_discount) as avg_disc,
-          |   count(*) as count_order
-          |from
-          |   lineitem
-          |where
-          |   l_shipdate <= to_date('1998-09-02')
-          |group by
-          |   l_returnflag,
-          |   l_linestatus
-          |order by
-          |   l_returnflag,
-          |   l_linestatus
-        """.stripMargin
+   for (it <- 1 to iterations) {
+     println(s"Iteration $it")
+     queries.split(",").map({
+       (n:String) => getQuery(tpch_opt_string, s"tpch${n}")
+     }).foreach({
+         case (name: String, sql: String) =>
+           println(s"\tQuery $name")
+           val df = spark.sql(sql)
+           val queryExecution = df.queryExecution
+
+           val pw = new FileWriter("result.csv", true)
+           pw.write("\n" + name + ",")
+           pw.flush
+           pw.close
+
+           Run.runDelite(queryExecution.optimizedPlan, true)(Map())
+
+       })
+   }
+ }
+
+//
+// def runbenchmarkSpark2(iterations: Int, queries: String = "01,02,03,04,05,06,07,08,09,10,11,12,13,14,15,16,17,18,19,20,21,22", filename: String) = {
+//   val res = HashMap[String,ArrayBuffer[Double]]()
+//   preload()
+//
+//   for (it <- 1 to iterations) {
+//     println(s"Iteration $it")
+//     queries.split(",").map({
+//       (n:String) => getQuery(tpch_opt_string, s"tpch${n}")
+//     }).foreach({
+//         case (name: String, sql: String) =>
+//           println(s"\tQuery $name")
+//           val df = spark.sql(sql)
+//           val queryExecution = df.queryExecution
+//           // We are not counting the time of ScalaReflection.convertRowToScala.
+//           val parsingTime = measureTimeMs {
+//             queryExecution.logical
+//           }
+//           val analysisTime = measureTimeMs {
+//             queryExecution.analyzed
+//           }
+//           val optimizationTime = measureTimeMs {
+//             queryExecution.optimizedPlan
+//           }
+//           val planningTime = measureTimeMs {
+//             queryExecution.executedPlan
+//           }
+//
+//           val executionTime = measureTimeMs {
+//             df.rdd.foreach { row => Unit }
+//           }
+//
+//           val resq = res getOrElseUpdate (name, ArrayBuffer[Double]())
+//           resq += executionTime
+//           println("Results:")
+// 	  val pw = new FileWriter(filename, true)
+//           res.toSeq.sortWith((a,b) => a._1.length < b._1.length || (a._1.length == b._1.length && a._1 < b._1)) foreach { case (name, resq) =>
+//             print(name + ",")
+// 	    pw.write(name + ",")
+//             resq foreach { d => print(d + ",") }
+//             println(resq.min)
+//             pw.write(resq.min.toString + '\n')
+//           }
+// 	 pw.flush
+//          pw.close
+//       })
+//   }
+// }
+
+// def launchSpark2(iterations: Int, queries: String, filename: String)={
+//
+// queries.split(",").map({
+//       (n:String) => runbenchmarkSpark2(iterations,n,filename)
+//     })
+//
+//
+// }
+//
+//
+ def launchDelite2(iterations: Int, queries: String= "01,02,03,04,05,06,07,08,09,10,11,12,13,14,15,16,17,18,19,20,21,22")={
+
+ queries.split(",").map({
+       (n:String) => runbenchmarkDelite(iterations,n)
+     })
+ }
