@@ -81,6 +81,7 @@ object Run {
 
   def reorderString(exp: Expression): (Expression, Int) = exp match {
     case AttributeReference(_, StringType, _, _) => (exp, 2)
+    // TODO Char!!!
     case Literal(_, StringType) => (exp, 2)
     case And(left, right) =>
       val (l, ll) = reorderString(left)
@@ -508,7 +509,11 @@ object Run {
           val tmp = conv_date(value.asInstanceOf[Int])
           tmp.asInstanceOf[Rep[T]]
         case Literal(value, StringType) =>
-          unit[String](String.valueOf(value)).asInstanceOf[Rep[T]]
+          if (value.toString.length == 1) {
+            unit[Char](value.toString.charAt(0)).asInstanceOf[Rep[T]]
+          } else {
+            unit[String](value.toString).asInstanceOf[Rep[T]]
+          }
         case Literal(value, _) =>
           unit[T](value.asInstanceOf[T])
         case And(left, right) =>
@@ -1044,8 +1049,8 @@ object Run {
           else
             (manifest[Long].asInstanceOf[Manifest[Any]], (rec: Rep[Record]) => (groupingExpr :\ unit[Long](0L).asInstanceOf[Rep[Long]]) {
               case (exp: Expression, agg: Rep[Long]) => convertType(exp) match {
-                case man if (man == manifest[Char]) => (agg << 8) + compileExpr[Char](exp,input)(rec)(manifest[Char]).asInstanceOf[Rep[Long]]
-                case man if (man == manifest[Int])  => (agg << 32) + compileExpr[Int](exp,input)(rec)(manifest[Int]).asInstanceOf[Rep[Long]]
+                case man if (man == manifest[Char]) => (agg << 8) + compileExpr[Char](exp,input)(rec).asInstanceOf[Rep[Long]]
+                case man if (man == manifest[Int])  => (agg << 32) + compileExpr[Int](exp,input)(rec).asInstanceOf[Rep[Long]]
               }
             })
       }
