@@ -146,7 +146,7 @@ object Run {
   }
 
   def runOptiMQLExample(spark: SparkSession, file: String) = {
-    object DeliteQuery extends OptiMQLApplicationCompiler with FlareResult with DeliteTestRunner {
+    object DeliteQuery extends OptiMQLApplicationCompiler with DeliteTestRunner {
 
       val preloadData = false
 
@@ -549,6 +549,7 @@ object Run {
                 compileExpr[T](secondbranch, input)(rec)
             case None => // System.out.println("Filter removed (" + condition + ")")
               compileExpr[T](secondbranch, input)(rec)
+          }
         case AggregateExpression(child, _, _, _) =>
           compileAggExpr[T](child, input)(rec.asInstanceOf[Rep[Table[Record]]])
         case ScalarSubquery(query, children, id) =>
